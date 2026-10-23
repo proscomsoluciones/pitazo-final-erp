@@ -57,6 +57,14 @@ class RolesAndPermissionsSeeder extends Seeder
 
 
         // Create test users and assign roles
+        $seedPassword = env('SEED_USER_PASSWORD');
+
+        if (! $seedPassword) {
+            throw new \RuntimeException(
+                'Define SEED_USER_PASSWORD en tu .env antes de correr este seeder (no se usan contraseñas fijas en el código).'
+            );
+        }
+
         $users = [
             ['name' => 'Super Admin', 'email' => 'admin@pitazofinal.com', 'role' => 'Super admin'],
             ['name' => 'Presidente ASOC', 'email' => 'presidente@pitazofinal.com', 'role' => 'Presidente'],
@@ -70,7 +78,7 @@ class RolesAndPermissionsSeeder extends Seeder
                 'email' => $userData['email']
             ], [
                 'name' => $userData['name'],
-                'password' => Hash::make('Jupipe2083@'),
+                'password' => Hash::make($seedPassword),
             ]);
             $user->assignRole($userData['role']);
         }
