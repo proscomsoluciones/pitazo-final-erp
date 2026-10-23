@@ -478,7 +478,7 @@
                 </tr>
             @empty
                 <tr>
-                    <td colspan="7" class="empty-row">
+                    <td colspan="4" class="empty-row">
                         No se registraron sanciones disciplinarias en la presente fecha jugada.
                     </td>
                 </tr>
@@ -489,7 +489,7 @@
     {{-- NOTAS Y OBSERVACIONES GENERALES --}}
     @if($notas->count() > 0)
         <div style="margin-top: 10px;">
-            <div class="section-header">Notas</div>
+            <div class="section-header">Notas &mdash; {{ $campeonato->nombre }}</div>
             <ul class="notes-list">
                 @foreach($notas as $nota)
                     @php
@@ -512,7 +512,7 @@
     {{-- FONDOS SOLIDARIOS --}}
     @if($fondos->count() > 0)
         <div style="margin-top: 10px;">
-            <div class="section-header">Fondos Solidarios</div>
+            <div class="section-header">Fondos Solidarios &mdash; {{ $campeonato->nombre }}</div>
             <ul class="notes-list">
                 @foreach($fondos as $fondo)
                     <li>

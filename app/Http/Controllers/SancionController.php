@@ -291,9 +291,16 @@ class SancionController extends Controller
             'fecha_emision' => now()->format('Y-m-d')
         ])->setPaper('a4', 'landscape');
 
+        // Ej: Acta_Disciplina_Fecha_11_Apertura_Campeonato_oficial_2026.pdf
+        $nombreArchivo = collect(['Acta_Disciplina', 'Fecha', $numero_fecha, $fase->nombre, $campeonato->nombre])
+            ->map(fn ($parte) => trim(preg_replace('/[^A-Za-z0-9]+/', '_', \Illuminate\Support\Str::ascii((string) $parte)), '_'))
+            ->filter()
+            ->unique() // en liguillas la fase suele llamarse igual que el campeonato
+            ->implode('_');
+
         return response($pdf->output(), 200, [
             'Content-Type' => 'application/pdf',
-            'Content-Disposition' => 'inline; filename="Acta_Disciplina_' . $campeonato->nombre . '.pdf"',
+            'Content-Disposition' => 'inline; filename="' . $nombreArchivo . '.pdf"',
             'Cache-Control' => 'no-cache, no-store, must-revalidate',
             'Pragma' => 'no-cache',
             'Expires' => '0',

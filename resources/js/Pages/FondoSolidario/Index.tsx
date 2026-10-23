@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import { Head, useForm, router, usePage } from '@inertiajs/react';
 import { Plus, HeartHandshake, Search, X, ChevronLeft, ChevronRight, Users, Edit2, Trash2, Shield } from 'lucide-react';
@@ -58,6 +58,8 @@ export default function Index({ fondos, campeonatos, clubes }: { fondos: Fondo[]
     // Calculo automatico del beneficio (dias de reposo / fractura)
     const [diasReposo, setDiasReposo] = useState('');
     const [esFractura, setEsFractura] = useState(false);
+    // Ultimo diagnostico generado desde dias/fractura, para no pisar un texto escrito a mano
+    const diagnosticoAuto = useRef('');
 
     // Pagination state
     const [perPage, setPerPage] = useState<number | 'TODOS'>(10);
@@ -86,16 +88,27 @@ export default function Index({ fondos, campeonatos, clubes }: { fondos: Fondo[]
         return null; // fuera de rango (>30 dias): definir monto manualmente
     };
 
+    // Ej: "Fractura, aporte por 21 días" / "Aporte por 14 días"
+    const generarDiagnostico = (dias: string, fractura: boolean): string => {
+        const d = Number(dias);
+        const porDias = d > 0 ? `aporte por ${d} días` : '';
+        if (fractura) return porDias ? `Fractura, ${porDias}` : 'Fractura';
+        return porDias ? porDias.charAt(0).toUpperCase() + porDias.slice(1) : '';
+    };
+
     const aplicarCalculoAutomatico = (dias: string, fractura: boolean) => {
         setDiasReposo(dias);
         setEsFractura(fractura);
         const resultado = calcularBeneficio(dias, fractura);
-        if (resultado) {
-            setData(d => ({ ...d, tipo_beneficio: `${resultado.pct}%`, monto_asignado: resultado.monto }));
-        } else {
-            // Sin dias validos y sin fractura: no dejar un % / monto de un calculo anterior
-            setData(d => ({ ...d, tipo_beneficio: '', monto_asignado: '' }));
-        }
+        const nuevoDiagnostico = generarDiagnostico(dias, fractura);
+        setData(d => {
+            const diagnostico = !d.diagnostico || d.diagnostico === diagnosticoAuto.current ? nuevoDiagnostico : d.diagnostico;
+            return resultado
+                ? { ...d, diagnostico, tipo_beneficio: `${resultado.pct}%`, monto_asignado: resultado.monto }
+                // Sin dias validos y sin fractura: no dejar un % / monto de un calculo anterior
+                : { ...d, diagnostico, tipo_beneficio: '', monto_asignado: '' };
+        });
+        diagnosticoAuto.current = nuevoDiagnostico;
     };
 
     const fasesDisponibles = useMemo(() => {
@@ -136,6 +149,7 @@ export default function Index({ fondos, campeonatos, clubes }: { fondos: Fondo[]
             });
             setDiasReposo('');
             setEsFractura(false);
+            diagnosticoAuto.current = '';
         } else {
             setEditingFondo(null);
             setData({
@@ -145,6 +159,7 @@ export default function Index({ fondos, campeonatos, clubes }: { fondos: Fondo[]
             });
             setDiasReposo('');
             setEsFractura(false);
+            diagnosticoAuto.current = '';
         }
         setIsFormOpen(true);
     };
@@ -611,8 +626,7 @@ export default function Index({ fondos, campeonatos, clubes }: { fondos: Fondo[]
                                         min={0}
                                         value={diasReposo}
                                         onChange={e => aplicarCalculoAutomatico(e.target.value, esFractura)}
-                                        disabled={esFractura}
-                                        className="w-full rounded-xl border-slate-300 bg-white text-sm font-medium focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-400"
+                                        className="w-full rounded-xl border-slate-300 bg-white text-sm font-medium focus:ring-2 focus:ring-blue-500"
                                         placeholder="Ej: 14"
                                     />
                                 </div>
@@ -623,11 +637,11 @@ export default function Index({ fondos, campeonatos, clubes }: { fondos: Fondo[]
                                         onChange={e => aplicarCalculoAutomatico(diasReposo, e.target.checked)}
                                         className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                                     />
-                                    Solo Fractura (200%)
+                                    Fractura (200%)
                                 </label>
                             </div>
                             <p className="text-[11px] text-slate-500 font-medium mt-2">
-                                Tabla: 1-7 días → 50% ($2.500) · 8-13 días → 75% ($3.750) · 14-30 días → 100% ($5.000) · Fractura → 200% ($10.000).
+                                Tabla: 1-7 días → 50% ($2.500) · 8-13 días → 75% ($3.750) · 14-30 días → 100% ($5.000) · Fractura → 200% ($10.000, registre igual los días de reposo).
                                 Más de 30 días: complete el % y monto manualmente abajo.
                             </p>
                         </div>
