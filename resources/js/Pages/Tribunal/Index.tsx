@@ -146,6 +146,8 @@ export default function TribunalDashboard({
     const [isFormOpen, setIsFormOpen] = useState(false);
     const [editingSancionId, setEditingSancionId] = useState<number | null>(null);
     const [basePartidos, setBasePartidos] = useState<number>(1);
+    // Contexto (campeonato/fase/fecha) seleccionado en la página antes de abrir una edición, para restaurarlo al cerrar
+    const [contextoPrevio, setContextoPrevio] = useState<{ campeonato_id: string; fase_id: string; numero_fecha: string } | null>(null);
 
     // Detección de Reincidencia: calcular sanciones previas del jugador (+1 partido por antecedente)
     const antecedenteSanciones = useMemo(() => {
@@ -235,25 +237,34 @@ export default function TribunalDashboard({
     const submit = (e: React.FormEvent) => {
         e.preventDefault();
         
+        const options = {
+            preserveScroll: true,
+            onSuccess: () => {
+                resetForm();
+                setIsFormOpen(false);
+            },
+            onError: () => setToast({show: true, message: 'No se pudo guardar: revisa los datos marcados en el formulario.', type: 'error'}),
+        };
+
         if (editingSancionId) {
-            put(route('tribunal.sanciones.update', editingSancionId), {
-                onSuccess: () => {
-                    resetForm();
-                    setIsFormOpen(false);
-                },
-            });
+            put(route('tribunal.sanciones.update', editingSancionId), options);
         } else {
-            post(route('tribunal.sanciones.store'), {
-                onSuccess: () => {
-                    resetForm();
-                    setIsFormOpen(false);
-                },
-            });
+            post(route('tribunal.sanciones.store'), options);
         }
+    };
+
+    const closeForm = () => {
+        // Al cancelar una edición se descartan los cambios y se restaura el contexto de la página
+        if (editingSancionId) resetForm();
+        setIsFormOpen(false);
     };
 
     const resetForm = () => {
         reset('club_id', 'jugador_rut', 'jugador_nombre', 'articulo_reglamento', 'tipo_falta', 'observacion', 'cantidad_sancion', 'tipo_sancion', 'unidad_tiempo', 'fecha_resolucion', 'estado');
+        if (contextoPrevio) {
+            setData(prev => ({ ...prev, ...contextoPrevio }));
+            setContextoPrevio(null);
+        }
         setBasePartidos(1);
         clearErrors();
         setEditingSancionId(null);
@@ -266,8 +277,15 @@ export default function TribunalDashboard({
         )).length;
         
         setBasePartidos(Math.max(1, sancion.cantidad_sancion - prevCount));
+        if (!editingSancionId) {
+            setContextoPrevio({ campeonato_id: data.campeonato_id, fase_id: data.fase_id, numero_fecha: data.numero_fecha });
+        }
+        clearErrors();
         setData({
             ...data,
+            campeonato_id: sancion.campeonato_id?.toString() || '',
+            fase_id: sancion.fase_id?.toString() || '',
+            numero_fecha: sancion.numero_fecha?.toString() || '',
             club_id: sancion.club_id.toString(),
             jugador_rut: sancion.jugador?.rut || '',
             jugador_nombre: sancion.jugador?.nombre || '',
@@ -538,37 +556,38 @@ export default function TribunalDashboard({
                     </div>
 
                     {/* Sanction Form Modal */}
-                    <Modal show={isFormOpen} onClose={() => setIsFormOpen(false)} maxWidth="2xl">
+                    <Modal show={isFormOpen} onClose={closeForm} maxWidth="3xl">
                         <div className="bg-white rounded-2xl overflow-hidden shadow-2xl">
                             {/* Modal Header */}
-                            <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 px-6 py-5 text-white flex items-center justify-between relative overflow-hidden">
+                            <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 px-5 py-3 text-white flex items-center justify-between relative overflow-hidden">
                                 <div className="absolute -right-6 -bottom-6 w-24 h-24 bg-emerald-500/10 rounded-full blur-xl pointer-events-none"></div>
                                 <div className="flex items-center space-x-3.5 relative z-10">
-                                    <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/30 text-emerald-400 flex items-center justify-center shadow-inner">
-                                        <Gavel size={20} />
+                                    <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-400/30 text-emerald-400 flex items-center justify-center shadow-inner">
+                                        <Gavel size={16} />
                                     </div>
                                     <div>
                                         <h4 className="text-base font-extrabold tracking-tight text-white flex items-center gap-2">
                                             {editingSancionId ? 'Editar Sanción Disciplinaria' : 'Formulario de Ingreso de Sanción'}
                                         </h4>
-                                        <p className="text-xs text-slate-300 font-medium mt-0.5">
+                                        <p className="hidden sm:block text-xs text-slate-300 font-medium">
                                             {editingSancionId ? 'Modifique los datos de la sanción seleccionada' : 'Ingrese los detalles para registrar en el acta oficial'}
                                         </p>
                                     </div>
                                 </div>
                                 <button
                                     type="button"
-                                    onClick={() => setIsFormOpen(false)}
+                                    onClick={closeForm}
                                     className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white flex items-center justify-center transition-all relative z-10"
                                 >
                                     <X size={18} />
                                 </button>
                             </div>
 
-                            {/* Modal Content */}
-                            <div className="p-6 sm:p-8 space-y-6">
+                            {/* Modal Content: cuerpo con scroll propio y botones siempre visibles */}
+                            <form onSubmit={submit}>
+                            <div className="px-5 py-4 space-y-4 max-h-[calc(100vh-12rem)] overflow-y-auto">
                                 {/* Context Banner */}
-                                <div className="bg-gradient-to-r from-emerald-50/80 via-emerald-50/40 to-slate-50 border border-emerald-200/80 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                <div className="bg-gradient-to-r from-emerald-50/80 via-emerald-50/40 to-slate-50 border border-emerald-200/80 rounded-xl px-3 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                                     <div className="flex items-center space-x-3">
                                         <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
                                             <Trophy size={16} />
@@ -576,7 +595,13 @@ export default function TribunalDashboard({
                                         <div>
                                             <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider block">Aplicando Sanción en</span>
                                             <span className="text-xs font-extrabold text-slate-800">
-                                                {campeonatos.find(c => c.id.toString() === data.campeonato_id)?.nombre || 'Sin Campeonato'} 
+                                                {campeonatos.find(c => c.id.toString() === data.campeonato_id.toString())?.nombre || 'Sin Campeonato'}
+                                                {selectedFase && (
+                                                    <>
+                                                        <span className="text-emerald-600 font-semibold mx-1.5">•</span>
+                                                        {selectedFase.nombre}
+                                                    </>
+                                                )}
                                                 <span className="text-emerald-600 font-semibold mx-1.5">•</span>
                                                 Fecha {data.numero_fecha || '-'}
                                             </span>
@@ -588,9 +613,16 @@ export default function TribunalDashboard({
                                     </span>
                                 </div>
 
-                                <form onSubmit={submit} className="space-y-6">
-                                    {/* Fila 1: Club */}
-                                    <div>
+                                    {/* Errores de campos que no tienen un input visible en la ventana */}
+                                    {(['campeonato_id', 'fase_id', 'numero_fecha', 'estado', 'tipo_sancion', 'unidad_tiempo', 'observacion'] as const).some(k => errors[k]) && (
+                                        <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-semibold space-y-0.5">
+                                            {(['campeonato_id', 'fase_id', 'numero_fecha', 'estado', 'tipo_sancion', 'unidad_tiempo', 'observacion'] as const).map(k => errors[k] && <p key={k}>• {errors[k]}</p>)}
+                                        </div>
+                                    )}
+
+                                    {/* Fila 1: Club + Jugador (RUT + Nombre) */}
+                                    <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
+                                    <div className="md:col-span-4">
                                         <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
                                             Club Afectado <span className="text-red-500">*</span>
                                         </label>
@@ -613,16 +645,14 @@ export default function TribunalDashboard({
                                         {errors.club_id && <p className="text-red-500 text-xs font-medium mt-1">{errors.club_id}</p>}
                                     </div>
 
-                                    {/* Fila 2: Jugador (RUT + Nombre) */}
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                        <div>
-                                            <div className="flex justify-between items-center mb-1.5">
+                                        <div className="md:col-span-3">
+                                            <div className="flex flex-wrap justify-between items-center gap-1 mb-1.5">
                                                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
                                                     RUT Jugador <span className="text-red-500">*</span>
                                                 </label>
                                                 {jugadores.some(j => j.rut === data.jugador_rut) && (
                                                     <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                                                        ✓ Encontrado
+                                                        ✓ Existe
                                                     </span>
                                                 )}
                                             </div>
@@ -634,6 +664,16 @@ export default function TribunalDashboard({
                                                     type="text" 
                                                     value={data.jugador_rut}
                                                     onChange={e => {
+                                                        // RUT provisorio (PENDIENTE-NNNN): se respeta tal cual, sin formatear
+                                                        const upper = e.target.value.toUpperCase().trimStart();
+                                                        if (upper.startsWith('P')) {
+                                                            setData('jugador_rut', upper);
+                                                            const pendiente = jugadores.find(j => j.rut === upper);
+                                                            if (pendiente) {
+                                                                setData(prev => ({...prev, jugador_nombre: pendiente.nombre, jugador_rut: upper}));
+                                                            }
+                                                            return;
+                                                        }
                                                         let rawRut = e.target.value.replace(/[^kK0-9]/g, '');
                                                         if (rawRut.length === 0) {
                                                             setData('jugador_rut', '');
@@ -650,7 +690,7 @@ export default function TribunalDashboard({
                                                             setData(prev => ({...prev, jugador_nombre: existingPlayer.nombre, jugador_rut: finalRut}));
                                                         }
                                                     }}
-                                                    placeholder="Ej: 11.111.111-1"
+                                                    placeholder="11.111.111-1 o PENDIENTE-0001"
                                                     className={`pl-10 w-full rounded-xl border ${errors.jugador_rut ? 'border-red-300 bg-red-50/20' : 'border-slate-200 bg-slate-50/50'} focus:bg-white focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-sm font-semibold text-slate-800 transition-all shadow-xs`}
                                                     required
                                                 />
@@ -658,7 +698,7 @@ export default function TribunalDashboard({
                                             {errors.jugador_rut && <p className="text-red-500 text-xs font-medium mt-1">{errors.jugador_rut}</p>}
                                         </div>
 
-                                        <div className="md:col-span-2">
+                                        <div className="md:col-span-5">
                                             <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
                                                 Nombres y Apellidos <span className="text-red-500">*</span>
                                             </label>
@@ -677,7 +717,7 @@ export default function TribunalDashboard({
                                     {/* Alerta y Control de Reincidencia */}
                                     {reincidenciaCount > 0 && (
                                         esLiguilla && data.unidad_tiempo === 'PARTIDOS' ? (
-                                            <div className="p-4 rounded-xl bg-sky-50/90 border-2 border-sky-300/80 shadow-xs space-y-2">
+                                            <div className="p-3 rounded-xl bg-sky-50/90 border-2 border-sky-300/80 shadow-xs space-y-2">
                                                 <div className="flex items-center justify-between gap-2">
                                                     <div className="flex items-center space-x-2 text-sky-950 font-black text-xs uppercase tracking-wider">
                                                         <Info size={18} className="text-sky-600 shrink-0" />
@@ -710,7 +750,7 @@ export default function TribunalDashboard({
                                                 </div>
                                             </div>
                                         ) : (
-                                            <div className="p-4 rounded-xl bg-amber-50/90 border-2 border-amber-300/80 shadow-xs space-y-2.5">
+                                            <div className="p-3 rounded-xl bg-amber-50/90 border-2 border-amber-300/80 shadow-xs space-y-2">
                                                 <div className="flex items-center justify-between gap-2">
                                                     <div className="flex items-center space-x-2 text-amber-950 font-black text-xs uppercase tracking-wider">
                                                         <AlertCircle size={18} className="text-amber-600 shrink-0 animate-bounce" />
@@ -880,7 +920,7 @@ export default function TribunalDashboard({
                                             </label>
 
                                             {reincidenciaAplica && data.unidad_tiempo === 'PARTIDOS' ? (
-                                                <div className="bg-amber-50/90 p-3.5 rounded-xl border-2 border-amber-300 text-xs space-y-2.5 shadow-xs">
+                                                <div className="bg-amber-50/90 p-3 rounded-xl border-2 border-amber-300 text-xs space-y-2 shadow-xs">
                                                     <div className="flex items-center justify-between">
                                                         <span className="font-extrabold text-amber-950">Sanción Base por Infracción:</span>
                                                         <div className="flex items-center space-x-1.5">
@@ -971,11 +1011,13 @@ export default function TribunalDashboard({
                                         />
                                     </div>
 
+                            </div>
+
                                     {/* Actions */}
-                                    <div className="flex items-center justify-end space-x-3 pt-5 border-t border-slate-100">
+                                    <div className="flex items-center justify-end space-x-3 px-5 py-3 border-t border-slate-200 bg-slate-50">
                                         <button 
                                             type="button" 
-                                            onClick={() => setIsFormOpen(false)}
+                                            onClick={closeForm}
                                             className="px-5 py-2.5 rounded-xl font-bold text-sm text-slate-600 bg-slate-100 hover:bg-slate-200 transition-all"
                                         >
                                             Cancelar
@@ -995,8 +1037,7 @@ export default function TribunalDashboard({
                                             )}
                                         </button>
                                     </div>
-                                </form>
-                            </div>
+                            </form>
                         </div>
                     </Modal>
 
