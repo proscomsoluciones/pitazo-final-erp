@@ -14,6 +14,10 @@ class RutRule implements ValidationRule
      */
     public function validate(string $attribute, mixed $value, Closure $fail): void
     {
+        if (\App\Helpers\RutHelper::esPendiente($value)) {
+            return;
+        }
+
         if (!$this->validaRut($value)) {
             $fail('El RUT ingresado no es válido.');
         }

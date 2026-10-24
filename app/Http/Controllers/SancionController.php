@@ -9,6 +9,7 @@ use App\Models\Campeonato;
 use App\Models\Fase;
 use App\Http\Requests\StoreSancionRequest;
 use App\Rules\RutRule;
+use App\Helpers\RutHelper;
 use App\Services\SancionService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
@@ -67,11 +68,8 @@ class SancionController extends Controller
             'fecha_resolucion' => 'required|date',
         ]);
 
-        // Format RUT to XXXXXXXX-X
-        $rutLimpio = preg_replace('/[^kK0-9]/i', '', $data['jugador_rut']);
-        $dv = substr($rutLimpio, -1);
-        $numero = substr($rutLimpio, 0, -1);
-        $data['jugador_rut'] = strtoupper($numero . '-' . $dv);
+        // Formato XXXXXXXX-X, o PENDIENTE-NNNN para jugadores sin RUT
+        $data['jugador_rut'] = RutHelper::normalizar($data['jugador_rut']);
 
         // Autocreate/Update Jugador based on RUT
         $jugador = Jugador::updateOrCreate(
@@ -88,9 +86,7 @@ class SancionController extends Controller
         $esLiguilla = $fase && str_contains(strtolower($fase->nombre), 'liguilla');
 
         // Verificar antecedentes previos (Reincidencia)
-        $reincidenciasPrevias = Sancion::where('jugador_rut', $data['jugador_rut'])
-            ->orWhere('jugador_id', $jugador->id)
-            ->count();
+        $reincidenciasPrevias = Sancion::where('jugador_id', $jugador->id)->count();
 
         // En Liguilla NO se aplica reincidencia por partidos, solo por tiempo (MESES/AÑOS)
         if ($reincidenciasPrevias > 0 && !($esLiguilla && $data['unidad_tiempo'] === 'PARTIDOS')) {
@@ -142,21 +138,27 @@ class SancionController extends Controller
             'estado' => 'required|in:ACTIVO,CUMPLIDO',
         ]);
 
-        $rutLimpio = preg_replace('/[^kK0-9]/i', '', $data['jugador_rut']);
-        $dv = substr($rutLimpio, -1);
-        $numero = substr($rutLimpio, 0, -1);
-        $data['jugador_rut'] = strtoupper($numero . '-' . $dv);
+        // Formato XXXXXXXX-X, o PENDIENTE-NNNN para jugadores sin RUT
+        $data['jugador_rut'] = RutHelper::normalizar($data['jugador_rut']);
 
-        $jugador = Jugador::updateOrCreate(
-            ['rut' => $data['jugador_rut']],
-            [
-                'nombre' => $data['jugador_nombre'],
-                'club_id' => $data['club_id'],
-            ]
-        );
+        $jugador = Jugador::where('rut', $data['jugador_rut'])->first();
+        $jugadorActual = $sancion->jugador;
+
+        // Si el jugador de la sanción tenía RUT provisorio y se ingresa su RUT real (aún no registrado),
+        // se completa ese mismo jugador en vez de crear un duplicado.
+        if (!$jugador && $jugadorActual && RutHelper::esPendiente($jugadorActual->rut) && !RutHelper::esPendiente($data['jugador_rut'])) {
+            $jugador = $jugadorActual;
+        }
+
+        $jugador ??= new Jugador();
+        $jugador->fill([
+            'rut' => $data['jugador_rut'],
+            'nombre' => $data['jugador_nombre'],
+            'club_id' => $data['club_id'],
+        ])->save();
 
         $data['jugador_id'] = $jugador->id;
-        
+
         if ($data['tipo_sancion'] === 'TIEMPO') {
             $data['fecha_termino_cronologica'] = app(\App\Services\SancionService::class)->calcularFechaTermino(
                 $data['cantidad_sancion'],
