@@ -258,12 +258,12 @@
             color: #1e3a8a;
         }
 
-       
+
         /* ── FIRMAS ── */
         .signatures-table {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 160px;
+            margin-top: 110px;
             page-break-inside: avoid;
         }
 
@@ -348,6 +348,15 @@
             };
             $logoBase64 = 'data:' . $mime . ';base64,' . base64_encode(file_get_contents($logoPath));
         }
+
+        // Datos del involucrado (se mencionan en el texto de todos los oficios)
+        $invTipo = $caso->tipo_involucrado ?: ($caso->jugador ? 'JUGADOR' : ($caso->nombre_involucrado ? 'DIRIGENTE' : 'CLUB'));
+        $invNombre = $caso->jugador->nombre ?? $caso->nombre_involucrado;
+        $invRut = collect([$caso->rut_involucrado, $caso->jugador->rut ?? null])
+            ->first(fn ($r) => !empty($r) && !\App\Helpers\RutHelper::esPendiente($r));
+        $invRut = $invRut ? \App\Helpers\RutHelper::format($invRut) : 'No registrado';
+        $invClub = $caso->club->name ?? ($caso->jugador->club->name ?? null);
+        $invCargo = ['JUGADOR' => 'jugador', 'DIRIGENTE' => 'dirigente'][$invTipo] ?? null;
     @endphp
 
     @if($logoBase64)
@@ -414,7 +423,9 @@
     @if($tipoOficio === 'INVESTIGACION')
         <p class="body-text">
             Por medio del presente oficio, el Comité de Ética comunica formalmente la <strong>Apertura de
-                Investigación</strong>
+                Investigación</strong>@if($invCargo && $invNombre) al {{ $invCargo }}
+                <strong>{{ $invNombre }}</strong>, RUT <strong>{{ $invRut }}</strong>@if($invClub), del
+                <strong>{{ $invClub }}</strong>@endif,@endif
             respecto a los antecedentes y hechos puestos en conocimiento de este órgano.
         </p>
 
@@ -434,7 +445,9 @@
 
     @elseif($tipoOficio === 'CITACION')
         <p class="body-text">
-            Por medio del presente oficio, el Comité de Ética cita a comparecer en sesión oficial para tratar los hechos
+            Por medio del presente oficio, el Comité de Ética cita a comparecer @if($invCargo && $invNombre) al {{ $invCargo }}
+                <strong>{{ $invNombre }}</strong>, RUT <strong>{{ $invRut }}</strong>@if($invClub), del
+                <strong>{{ $invClub }}</strong>@endif,@endif en sesión oficial para tratar los hechos
             investigados bajo el expediente N°
             <strong>{{ ltrim(str_replace(['ET-', 'CET-', 'CED-'], '', $caso->folio), '0') ?: $caso->id }}</strong>.
         </p>
@@ -447,7 +460,10 @@
             <p style="margin-bottom: 3px;"><strong>Lugar de Comparecencia:</strong>
                 {{ $caso->lugar_citacion ?: 'Sede Oficial de la Asociación' }}
             </p>
-            <p><strong>Motivo de Citación:</strong> {{ $caso->asunto }}</p>
+            <p style="margin-bottom: 3px;"><strong>Motivo de Citación:</strong> {{ $caso->asunto }}</p>
+            @if($caso->descripcion)
+                <p><strong>Antecedentes:</strong> {{ $caso->descripcion }}</p>
+            @endif
         </div>
 
         <p class="body-text">
@@ -458,7 +474,9 @@
     @elseif($tipoOficio === 'INHABILITACION')
         <p class="body-text">
             Por medio del presente oficio, el Comité de Ética comunica formalmente la medida de
-            <strong>INHABILITACIÓN</strong> respecto a las actividades oficiales de la asociación.
+            <strong>INHABILITACIÓN</strong>@if($invCargo && $invNombre) del {{ $invCargo }}
+                <strong>{{ $invNombre }}</strong>, RUT <strong>{{ $invRut }}</strong>@if($invClub), del
+                <strong>{{ $invClub }}</strong>@endif,@endif respecto a las actividades oficiales de la asociación.
         </p>
 
         <div class="highlight-box">
@@ -470,6 +488,9 @@
                 (indefinida / hasta nuevo aviso)@endif
             </p>
             <p style="margin-bottom: 3px;"><strong>Causa / Fundamento:</strong> {{ $caso->asunto }}</p>
+            @if($caso->descripcion)
+                <p style="margin-bottom: 3px;"><strong>Antecedentes:</strong> {{ $caso->descripcion }}</p>
+            @endif
             <p><strong>Efecto:</strong> Queda suspendido el ejercicio de funciones deportivas o administrativas en
                 campeonatos oficiales.</p>
         </div>
