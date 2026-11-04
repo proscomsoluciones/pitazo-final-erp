@@ -69,8 +69,8 @@ class InterpretadorDictado
     }
 
     /**
-     * Misma regla del formulario del Tribunal: con sanciones previas (sin contar amonestaciones) el jugador es
-     * reincidente y se suma +1 partido por cada una a la cantidad base; no aplica en liguillas ni en sanciones por tiempo.
+     * Regla del libro de actas: con sanciones previas (sin contar amonestaciones) el jugador es reincidente y se suma
+     * +1 partido fijo a la cantidad base ("1+1 Partidos R"); no aplica en liguillas ni en sanciones por tiempo.
      */
     private function aplicarReincidencia(array $item, bool $esLiguilla): array
     {
@@ -94,8 +94,8 @@ class InterpretadorDictado
             $item['avisos'][] = "Liguilla: no se aplica reincidencia por partidos ({$previas} sanción(es) previa(s)); queda la sanción base.";
         } elseif ($previas > 0) {
             $item['reincidencia'] = true;
-            $item['cantidad'] = $base + $previas;
-            $item['avisos'][] = "Reincidente ({$previas} sanción(es) previa(s)): {$base} + {$previas} = {$item['cantidad']} partido(s)."
+            $item['cantidad'] = $base + 1;
+            $item['avisos'][] = "Reincidente ({$previas} sanción(es) previa(s)): {$base}+1 = {$item['cantidad']} partido(s)."
                 . ($dictado !== $item['cantidad'] ? " En el dictado venía {$dictado}." : '');
         } elseif ($item['reincidencia']) {
             $item['avisos'][] = "Se dictó R, pero no hay sanciones previas registradas; queda en {$dictado} partido(s) como en el acta.";
