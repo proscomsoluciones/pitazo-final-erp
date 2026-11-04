@@ -66,7 +66,7 @@ class DictadoParser
      */
     public static function detectarModulo(string $texto): array
     {
-        $lineas = preg_split('/\R/u', trim($texto)) ?: [];
+        $lineas = preg_split('/\R/u', trim(self::saltosDictados($texto))) ?: [];
         $primera = $lineas[0] ?? '';
 
         if ($modulo = self::ENCABEZADOS[self::normalizar($primera)] ?? null) {
@@ -81,6 +81,47 @@ class DictadoParser
         }
 
         return [null, $texto];
+    }
+
+    /**
+     * El teclado a veces escribe literalmente "nueva línea" / "línea nueva" / "punto y aparte"
+     * en vez de hacer el salto: se convierten en saltos de línea reales.
+     */
+    private static function saltosDictados(string $texto): string
+    {
+        return preg_replace('/\s*,?\s*\b(nueva l[ií]nea|l[ií]nea nueva|siguiente l[ií]nea|punto y aparte|salto de l[ií]nea)\b\s*[,.]?\s*/iu', "\n", $texto);
+    }
+
+    /**
+     * Arreglos de dictado dentro de una línea, antes de separar por comas.
+     */
+    private function corregirDictado(string $linea): string
+    {
+        // "2026" dictado como "20, 26"
+        $linea = preg_replace('/\b(20),?\s+(\d{2})\b/', '$1$2', $linea);
+        // Montos con coma de miles: "50,000" o "50, 000" -> "50.000" (no "Fondo 32, 100%")
+        $linea = preg_replace('/(?<=\b\d|\b\d\d|\b\d\d\d),\s?(?=\d{3}(?![\d%]))/u', '.', $linea);
+
+        return $linea;
+    }
+
+    /**
+     * "artículo 211, letra P": la letra dictada como campo aparte se une al artículo.
+     */
+    private function unirLetraDelArticulo(array $campos): array
+    {
+        $resultado = [];
+        foreach ($campos as $campo) {
+            $anterior = end($resultado);
+            if ($anterior !== false && preg_match('/^letra [a-z]$/', self::normalizar($campo))
+                && ($articulo = $this->articulo(self::normalizar($anterior))) && !str_contains($articulo, 'Letra')) {
+                $resultado[array_key_last($resultado)] = "{$anterior} {$campo}";
+                continue;
+            }
+            $resultado[] = $campo;
+        }
+
+        return $resultado;
     }
 
     /**
@@ -126,10 +167,8 @@ class DictadoParser
     {
         $resultado = [];
 
-        foreach (preg_split('/\R+/u', $texto) ?: [] as $linea) {
-            // "2026" dictado como "20, 26"
-            $linea = preg_replace('/\b(20),?\s+(\d{2})\b/', '$1$2', $linea);
-            $campos = $this->campos(trim($linea, " \t.-•*"));
+        foreach (preg_split('/\R+/u', self::saltosDictados($texto)) ?: [] as $linea) {
+            $campos = $this->unirLetraDelArticulo($this->campos(trim($this->corregirDictado($linea), " \t.-•*")));
             if (!$campos) {
                 continue;
             }
@@ -143,7 +182,7 @@ class DictadoParser
             if ($iContexto !== null) {
                 $fin = count($campos);
                 for ($j = $iContexto + 1; $j < count($campos); $j++) {
-                    if ($this->esInicioNota($campos[$j]) || ($esClub($campos[$j]) && !$this->esContexto(self::normalizar($campos[$j])))) {
+                    if ($this->esInicioNota($campos[$j]) || str_starts_with(self::normalizar($campos[$j]), 'fondo') || ($esClub($campos[$j]) && !$this->esContexto(self::normalizar($campos[$j])))) {
                         $fin = $j;
                         break;
                     }
@@ -287,31 +326,53 @@ class DictadoParser
             array_unshift($campos, $primero);
         }
 
-        $resto = [];
+        // Campos libres antes del primer dato (RUT, %, días, monto) y después
+        $antes = [];
+        $despues = [];
+        $dias = '/(\d{1,3}) (?:dias?|diaz)\b/'; // el dictado suele escribir "días" como "Díaz"
         foreach ($campos as $campo) {
             $norm = self::normalizar($campo);
+            $esDato = true;
 
-            if ($item['numero_fondo'] === null && preg_match('/^(?:n\s*[°º.]?|nro\.?|n[uú]mero)?\s*(\d{1,4})$/iu', $campo, $m)) {
+            if ($item['numero_fondo'] === null && !$antes && preg_match('/^(?:n\s*[°º.]?|nro\.?|n[uú]mero)?\s*(\d{1,4})$/iu', $campo, $m)) {
                 $item['numero_fondo'] = (int) $m[1];
+                continue;
             } elseif ($item['rut'] === null && ($rut = $this->rut($campo))) {
                 $item['rut'] = $rut;
             } elseif ($item['porcentaje'] === null && preg_match('/^(\d{2,3})\s*(?:%|por\s*ciento)$/iu', $campo, $m)) {
                 $item['porcentaje'] = (int) $m[1];
-            } elseif (str_contains($norm, 'fractura') || preg_match('/^(\d{1,3}) dias?\b/', $norm)) {
+            } elseif (str_contains($norm, 'fractura') || preg_match('/^' . trim($dias, '/') . '/', $norm)) {
                 $item['fractura'] = $item['fractura'] || str_contains($norm, 'fractura');
-                if (preg_match('/(\d{1,3}) dias?\b/', $norm, $m)) {
+                if (preg_match($dias, $norm, $m)) {
                     $item['dias'] = (int) $m[1];
                 }
             } elseif ($item['monto'] === null && ($monto = $this->monto($campo, true))) {
                 $item['monto'] = $monto;
             } else {
-                $resto[] = $campo;
+                $esDato = false;
+            }
+
+            if (!$esDato) {
+                if ($item['rut'] || $item['porcentaje'] || $item['dias'] || $item['fractura'] || $item['monto']) {
+                    $despues[] = $campo;
+                } else {
+                    $antes[] = $campo;
+                }
             }
         }
 
-        $item['club_texto'] = $resto[0] ?? null;
-        $item['jugador_texto'] = $resto[1] ?? null;
-        $extra = Str::ucfirst(implode(', ', array_slice($resto, 2)));
+        // club, jugador (aunque el dictado le haya puesto comas: "Julio, Astete, Valenzuela"), datos, detalle
+        if (count($antes) >= 2) {
+            $item['club_texto'] = $antes[0];
+            $item['jugador_texto'] = implode(' ', array_slice($antes, 1));
+            $extra = Str::ucfirst(implode(', ', $despues));
+        } else {
+            // Datos dictados antes del club ("Fondo 32, 100%, Alianza, Julio Astete"): se toman en orden
+            $libres = array_merge($antes, $despues);
+            $item['club_texto'] = $libres[0] ?? null;
+            $item['jugador_texto'] = $libres[1] ?? null;
+            $extra = Str::ucfirst(implode(', ', array_slice($libres, 2)));
+        }
 
         // Tabla oficial del Fondo Solidario (misma que el formulario del sistema)
         if ($item['porcentaje'] === null) {
@@ -498,6 +559,9 @@ class DictadoParser
      */
     private function articulo(string $norm): ?string
     {
+        // "doscientos diez" dictado como "dos 10" -> 210
+        $norm = preg_replace('/^((?:art(?:iculo)?\s*)?)(?:dos|2)\s+(\d{2})\b/', '${1}2$2', $norm);
+
         if (!preg_match('/^(?:art(?:iculo)?\s*)?(\d{3})(?:\s*(?:letra\s*)?([a-z]))?$/', $norm, $m)) {
             return null;
         }

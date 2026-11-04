@@ -225,6 +225,38 @@ class DictadoParserTest extends TestCase
         $this->assertSame(['Alianza', 100], [$items[3]['club_texto'], $items[3]['porcentaje']]);
     }
 
+    public function test_errores_reales_del_dictado(): void
+    {
+        $esClub = fn ($c) => in_array(DictadoParser::normalizar($c), ['san carlos', 'palencia', 'alianza', 'santa rosa'], true);
+
+        // "210 H" dictado "dos 10 H" y "50.000" dictado "50,000"
+        $items = (new DictadoParser())->parse(
+            'clausura, fecha dos, 8 de noviembre, San Carlos, Francisco Garat Hernández, dos 10 H, conducta violenta, cuatro partidos, multa, Palencia, 50,000, no presentación, serie femenina',
+            DictadoParser::DISCIPLINA, $esClub
+        )['items'];
+        $this->assertSame(['Art. 210 Letra H', 4], [$items[0]['articulo'], $items[0]['cantidad']]);
+        $this->assertSame(['Palencia', 50000, 'No presentación, serie femenina'], [$items[1]['club_texto'], $items[1]['monto'], $items[1]['nota']]);
+
+        // "días" dictado "Díaz" y el nombre del fondo con comas
+        $fondo = (new DictadoParser())->parse('clausura, fecha dos, 8 de noviembre, fondo, alianza, Julio, Astete, Valenzuela, 14 Díaz', DictadoParser::DISCIPLINA, $esClub)['items'][0];
+        $this->assertSame(['FONDO', 'alianza', 'Julio Astete Valenzuela', 14, 100], [$fondo['tipo'], $fondo['club_texto'], $fondo['jugador_texto'], $fondo['dias'], $fondo['porcentaje']]);
+
+        // "nueva línea" escrita como texto y "letra P" en un campo aparte
+        [$modulo, $texto] = DictadoParser::detectarModulo("Disciplina, línea nueva campeonato oficial 2026, clausura, fecha dos\nSanta Rosa, Javier, Vera Llano, artículo 211, letra P, doble amonestación, un partido");
+        $resultado = (new DictadoParser())->parse($texto, $modulo, $esClub);
+        $this->assertSame(2, $resultado['contexto']['numero_fecha']);
+        $this->assertSame(['Javier Vera Llano', 'Art. 211 Letra P', 'Doble amonestación'], [
+            $resultado['items'][0]['jugador_texto'], $resultado['items'][0]['articulo'], $resultado['items'][0]['tipo_falta'],
+        ]);
+    }
+
+    public function test_porcentaje_del_fondo_no_se_une_como_miles(): void
+    {
+        $fondo = $this->parse('Fondo 32, 100%, Alianza, Julio Astete Valenzuela')['items'][0];
+
+        $this->assertSame([32, 100, 'Alianza', 'Julio Astete Valenzuela'], [$fondo['numero_fondo'], $fondo['porcentaje'], $fondo['club_texto'], $fondo['jugador_texto']]);
+    }
+
     public function test_detectar_modulo_en_la_primera_linea(): void
     {
         $this->assertSame([DictadoParser::ETICA, 'Valencia, Pedro'], DictadoParser::detectarModulo("Ética\nValencia, Pedro"));
