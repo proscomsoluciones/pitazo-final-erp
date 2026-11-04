@@ -21,14 +21,19 @@ class TelegramClient
         ]));
     }
 
-    public function editarMensaje(string|int $chatId, int $messageId, string $html): void
+    /**
+     * Sin $botones, Telegram quita los botones que tenía el mensaje.
+     */
+    public function editarMensaje(string|int $chatId, int $messageId, string $html, ?array $botones = null): void
     {
-        $this->llamar('editMessageText', [
+        $this->llamar('editMessageText', array_filter([
             'chat_id' => $chatId,
             'message_id' => $messageId,
             'text' => $html,
             'parse_mode' => 'HTML',
-        ]);
+            'disable_web_page_preview' => true,
+            'reply_markup' => $botones ? json_encode(['inline_keyboard' => $botones]) : null,
+        ]));
     }
 
     public function responderBoton(string $callbackId, ?string $texto = null): void

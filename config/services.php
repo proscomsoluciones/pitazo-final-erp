@@ -30,8 +30,13 @@ return [
 
     'telegram' => [
         'token' => env('TELEGRAM_BOT_TOKEN'),
-        // IDs de usuario de Telegram autorizados, separados por coma (se obtienen con /id en el bot)
-        'usuarios_autorizados' => array_filter(array_map('trim', explode(',', (string) env('TELEGRAM_USUARIOS_AUTORIZADOS', '')))),
+        // IDs de Telegram autorizados, separados por coma (se obtienen con /id en el bot). Con "ID:correo"
+        // se asocia el usuario del sistema que aprueba desde el bot: "5065574888:usuario@dominio.cl"
+        'usuarios_autorizados' => collect(explode(',', (string) env('TELEGRAM_USUARIOS_AUTORIZADOS', '')))
+            ->map(fn ($u) => array_map('trim', explode(':', $u, 2)))
+            ->filter(fn ($u) => $u[0] !== '')
+            ->mapWithKeys(fn ($u) => [$u[0] => $u[1] ?? null])
+            ->all(),
         'webhook_secret' => env('TELEGRAM_WEBHOOK_SECRET'),
     ],
 

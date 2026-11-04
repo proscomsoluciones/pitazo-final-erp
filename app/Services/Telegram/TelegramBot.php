@@ -3,19 +3,30 @@
 namespace App\Services\Telegram;
 
 use App\Models\TelegramBorrador;
+use App\Models\User;
+use App\Support\Auditor;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Validator;
 
 /**
  * Atiende los mensajes que llegan al bot (por webhook o por polling).
- * Nunca registra nada directamente: crea borradores que se aprueban en el sistema.
+ * Cada mensaje crea un borrador; se aprueba con los botones del bot (pidiendo confirmación)
+ * o en la pantalla de revisión del sistema.
  */
 class TelegramBot
 {
     private const NOMBRES_MODULO = [DictadoParser::DISCIPLINA => '⚖️ Disciplina', DictadoParser::ETICA => '🏛️ Ética'];
 
+    private const PERMISO_MODULO = [
+        DictadoParser::DISCIPLINA => 'gestionar sanciones',
+        DictadoParser::ETICA => 'gestionar etica',
+    ];
+
     public function __construct(
         private TelegramClient $telegram,
         private InterpretadorDictado $interpretador,
+        private AprobadorBorrador $aprobador,
     ) {
     }
 
@@ -90,10 +101,21 @@ class TelegramBot
     {
         $chatId = $boton['message']['chat']['id'] ?? null;
         $userId = (string) ($boton['from']['id'] ?? '');
-        $modulo = str_replace('modulo:', '', $boton['data'] ?? '');
+        [$accion, $valor] = array_pad(explode(':', $boton['data'] ?? '', 2), 2, '');
 
-        if (!$chatId || !$this->autorizado($userId) || !isset(self::NOMBRES_MODULO[$modulo])) {
+        if (!$chatId || !$this->autorizado($userId)) {
             $this->telegram->responderBoton($boton['id'], 'No autorizado.');
+            return;
+        }
+
+        if (in_array($accion, ['aprobar', 'confirmar', 'volver', 'descartar'], true)) {
+            $this->accionBorrador($boton, $accion, (int) $valor, $userId);
+            return;
+        }
+
+        $modulo = $valor;
+        if ($accion !== 'modulo' || !isset(self::NOMBRES_MODULO[$modulo])) {
+            $this->telegram->responderBoton($boton['id']);
             return;
         }
 
@@ -135,7 +157,142 @@ class TelegramBot
             'fecha_resolucion' => $contexto['fecha_resolucion'] ?? null,
         ]);
 
-        $this->telegram->enviarMensaje($chatId, $this->resumen($borrador, $contexto['avisos'] ?? []));
+        $this->telegram->enviarMensaje($chatId, $this->resumen($borrador, $contexto['avisos'] ?? []), $this->botonesBorrador($borrador));
+    }
+
+    /**
+     * Botones del resumen: aprobar (pide confirmación), confirmar, volver y descartar.
+     */
+    private function accionBorrador(array $boton, string $accion, int $id, string $telegramId): void
+    {
+        $chatId = $boton['message']['chat']['id'];
+        $messageId = $boton['message']['message_id'];
+        $borrador = TelegramBorrador::with(['campeonato', 'fase'])->find($id);
+
+        if (!$borrador || $borrador->estado !== 'PENDIENTE') {
+            $this->telegram->responderBoton($boton['id'], 'Este borrador ya fue revisado.');
+            if ($borrador) {
+                $this->telegram->editarMensaje($chatId, $messageId, $this->resumen($borrador) . "\n\n" . $this->estadoFinal($borrador));
+            }
+            return;
+        }
+
+        $usuario = $this->usuarioSistema($telegramId);
+        $permiso = self::PERMISO_MODULO[$borrador->modulo];
+        if (!$usuario || !$usuario->can($permiso)) {
+            $this->telegram->responderBoton($boton['id'], 'Sin permiso para aprobar desde Telegram.');
+            $this->telegram->enviarMensaje($chatId, $usuario
+                ? "Tu usuario del sistema ({$usuario->email}) no tiene el permiso «{$permiso}». Revísalo en el sistema."
+                : 'Tu Telegram no está asociado a un usuario del sistema; pide al administrador que lo asocie. Mientras tanto, aprueba en el sistema.');
+            return;
+        }
+
+        if ($accion === 'volver') {
+            $this->telegram->responderBoton($boton['id']);
+            $this->telegram->editarMensaje($chatId, $messageId, $this->resumen($borrador), $this->botonesBorrador($borrador));
+            return;
+        }
+
+        if ($accion === 'descartar') {
+            Auth::setUser($usuario);
+            $borrador->update(['estado' => 'DESCARTADO', 'revisado_por' => $usuario->id, 'revisado_at' => now()]);
+            Auditor::log('ELIMINAR', $borrador->modulo === DictadoParser::ETICA ? 'ETICA' : 'TRIBUNAL', "Descartó el borrador de Telegram #{$borrador->id} desde Telegram.");
+            $this->telegram->responderBoton($boton['id'], 'Borrador descartado.');
+            $this->telegram->editarMensaje($chatId, $messageId, $this->resumen($borrador) . "\n\n" . $this->estadoFinal($borrador->fresh('revisor')));
+            return;
+        }
+
+        // aprobar / confirmar: misma validación que la pantalla de revisión
+        $errores = $this->erroresParaAprobar($borrador, $usuario);
+        if ($errores) {
+            $this->telegram->responderBoton($boton['id'], 'Falta información para aprobar.');
+            $this->telegram->enviarMensaje($chatId, "No se puede aprobar el borrador #{$borrador->id} desde aquí:\n"
+                . implode("\n", array_map(fn ($e) => '• ' . htmlspecialchars($e, ENT_NOQUOTES), $errores))
+                . "\n\nCorrígelo en el sistema o descártalo y dicta de nuevo:\n" . route('telegram.borradores.show', $borrador->id));
+            return;
+        }
+
+        $incluidos = count(array_filter($borrador->items, fn ($i) => !empty($i['incluir'])));
+        $omitidos = count($borrador->items) - $incluidos;
+
+        if ($accion === 'aprobar') {
+            $this->telegram->responderBoton($boton['id']);
+            $torneo = implode(' · ', array_filter([$borrador->campeonato?->nombre, $borrador->fase?->nombre,
+                $borrador->numero_fecha ? "Fecha {$borrador->numero_fecha}" : null]));
+            $pregunta = "❓ <b>¿Registrar {$incluidos} registro(s)" . ($torneo ? ' en ' . htmlspecialchars($torneo, ENT_NOQUOTES) : '') . '?</b>'
+                . ($omitidos ? "\n{$omitidos} línea(s) incompleta(s) no se registrarán." : '');
+            $this->telegram->editarMensaje($chatId, $messageId, $this->resumen($borrador) . "\n\n" . $pregunta, [[
+                ['text' => '✅ Sí, registrar', 'callback_data' => "confirmar:{$borrador->id}"],
+                ['text' => '↩️ Volver', 'callback_data' => "volver:{$borrador->id}"],
+            ]]);
+            return;
+        }
+
+        // confirmar
+        Auth::setUser($usuario);
+        $this->aprobador->aprobar($borrador, [
+            'campeonato_id' => $borrador->campeonato_id,
+            'fase_id' => $borrador->fase_id,
+            'numero_fecha' => $borrador->numero_fecha,
+            'fecha_resolucion' => $borrador->fecha_resolucion?->toDateString(),
+        ], $borrador->items, $usuario->id);
+
+        $this->telegram->responderBoton($boton['id'], 'Registrado en el sistema.');
+        $this->telegram->editarMensaje($chatId, $messageId, $this->resumen($borrador) . "\n\n" . $this->estadoFinal($borrador->fresh('revisor')));
+    }
+
+    /**
+     * @return string[] errores legibles; vacío si se puede aprobar
+     */
+    private function erroresParaAprobar(TelegramBorrador $borrador, User $usuario): array
+    {
+        $items = $borrador->items;
+        $incluidos = array_filter($items, fn ($i) => !empty($i['incluir']));
+        if (!$incluidos) {
+            return ['No hay registros completos para aprobar.'];
+        }
+        if (array_filter($incluidos, fn ($i) => $i['tipo'] === 'FONDO') && !$usuario->can('gestionar fondos')) {
+            return ['Tu usuario no tiene permiso para registrar fondos solidarios.'];
+        }
+
+        $datos = [
+            'campeonato_id' => $borrador->campeonato_id,
+            'fase_id' => $borrador->fase_id,
+            'numero_fecha' => $borrador->numero_fecha,
+            'fecha_resolucion' => $borrador->fecha_resolucion?->toDateString(),
+            'items' => $items,
+        ];
+        $reglas = ValidadorBorrador::reglasContexto($borrador) + ValidadorBorrador::reglasItems($items);
+        $validador = Validator::make($datos, $reglas, ValidadorBorrador::MENSAJES);
+
+        return collect($validador->errors()->messages())
+            ->map(fn ($mensajes, $campo) => ValidadorBorrador::describirCampo($campo) . ': ' . $mensajes[0])
+            ->values()
+            ->all();
+    }
+
+    private function botonesBorrador(TelegramBorrador $borrador): array
+    {
+        return [[
+            ['text' => '✅ Aprobar', 'callback_data' => "aprobar:{$borrador->id}"],
+            ['text' => '🗑️ Descartar', 'callback_data' => "descartar:{$borrador->id}"],
+        ]];
+    }
+
+    private function estadoFinal(TelegramBorrador $borrador): string
+    {
+        $quien = $borrador->revisor ? ' por ' . htmlspecialchars($borrador->revisor->name, ENT_NOQUOTES) : '';
+
+        return $borrador->estado === 'APROBADO'
+            ? "✅ <b>Aprobado{$quien}</b>: " . AprobadorBorrador::describirResultado($borrador->resultado ?? []) . '.'
+            : "🗑️ <b>Descartado{$quien}</b>. No se registró nada.";
+    }
+
+    private function usuarioSistema(string $telegramId): ?User
+    {
+        $correo = config('services.telegram.usuarios_autorizados')[$telegramId] ?? null;
+
+        return $correo ? User::where('email', $correo)->first() : null;
     }
 
     public function resumen(TelegramBorrador $borrador, array $avisosContexto = []): string
@@ -220,14 +377,16 @@ class TelegramBot
                 'día' => !$borrador->fecha_resolucion,
             ]));
             if ($faltan) {
-                $lineas[] = 'ℹ️ Falta: ' . implode(', ', $faltan) . '. Puedes dictarlo en la primera línea '
-                    . '(ej: <i>Campeonato oficial 2026, Clausura, fecha 2, 8 de noviembre</i>) o elegirlo al aprobar.';
+                $lineas[] = 'ℹ️ Falta: ' . implode(', ', $faltan) . '. Para aprobar desde aquí, dicta de nuevo con la primera línea '
+                    . '(ej: <i>Campeonato oficial 2026, Clausura, fecha 2, 8 de noviembre</i>) o elígelo en el sistema.';
             }
         }
-        $lineas[] = $totalAvisos
-            ? "Revisa los {$totalAvisos} aviso(s) y aprueba en el sistema:"
-            : 'Revisa y aprueba en el sistema:';
-        $lineas[] = route('telegram.borradores.show', $borrador->id);
+        if ($borrador->estado === 'PENDIENTE') {
+            if ($totalAvisos) {
+                $lineas[] = "Revisa los {$totalAvisos} aviso(s).";
+            }
+            $lineas[] = 'Aprueba aquí con ✅ o corrige en el sistema: ' . route('telegram.borradores.show', $borrador->id);
+        }
 
         return implode("\n", $lineas);
     }
@@ -283,7 +442,7 @@ class TelegramBot
             $this->formato(DictadoParser::ETICA),
             '',
             '• Al dictar, di «coma» entre datos y «nueva línea» entre registros.',
-            '• Nada se registra hasta aprobar el borrador en el sistema.',
+            '• Nada se registra hasta aprobar: con el botón ✅ Aprobar (pide confirmación) o en el sistema.',
             '',
             '/disciplina o /etica — ver solo ese formato',
             '/pendientes — borradores sin aprobar',
@@ -338,6 +497,6 @@ class TelegramBot
 
     private function autorizado(string $userId): bool
     {
-        return in_array($userId, config('services.telegram.usuarios_autorizados', []), true);
+        return $userId !== '' && array_key_exists($userId, config('services.telegram.usuarios_autorizados', []));
     }
 }
