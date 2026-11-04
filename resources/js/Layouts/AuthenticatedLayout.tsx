@@ -4,7 +4,7 @@ import { Link, usePage, router } from '@inertiajs/react';
 import { 
     Menu, X, LogOut, Shield, Users, KeyRound, ChevronDown,
     Trophy, Building2, Scale, LayoutDashboard, Gavel, UserCheck, Bell, History,
-    Check, CheckCheck, Trash2, HeartHandshake
+    Check, CheckCheck, Trash2, HeartHandshake, Send
 } from 'lucide-react';
 
 function SwipeableNotificationItem({ n }: { n: any }) {
@@ -181,7 +181,7 @@ export default function Authenticated({
 
     // Verificaciones de estado activo para categorías
     const isInicioActive = route().current('dashboard');
-    const isComitesActive = route().current('tribunal.*') || route().current('etica.*') || route().current('fondos.*');
+    const isComitesActive = route().current('tribunal.*') || route().current('etica.*') || route().current('fondos.*') || route().current('telegram.*');
     const isDeportivaActive = route().current('jugadores.*') || route().current('clubes.*') || route().current('torneos.*');
     const isAsociacionActive = route().current('configuracion.asociacion*') || route().current('users.*') || route().current('roles.*') || route().current('permissions.*') || route().current('auditoria.*');
 
@@ -383,6 +383,17 @@ export default function Authenticated({
                                         </div>
                                     </Dropdown.Link>
                                 )}
+                                {hasPermission('gestionar sanciones') && (
+                                    <Dropdown.Link href={route('telegram.borradores.index')} className="flex items-center gap-3 font-extrabold text-slate-900 py-3">
+                                        <div className="p-2.5 bg-slate-100 rounded-xl text-slate-900 font-bold shrink-0">
+                                            <Send size={18} />
+                                        </div>
+                                        <div>
+                                            <span className="block font-black text-slate-900 text-sm leading-tight">Borradores Telegram</span>
+                                            <span className="block text-xs text-slate-600 font-bold mt-0.5">Sanciones dictadas al bot</span>
+                                        </div>
+                                    </Dropdown.Link>
+                                )}
                             </Dropdown.Content>
                         </Dropdown>
 
@@ -504,6 +515,11 @@ export default function Authenticated({
                         <Link href={route('fondos.index')} onClick={() => setShowingNavigationDropdown(false)} className="flex items-center space-x-3 px-4 py-2.5 rounded-xl font-bold bg-slate-50 text-slate-800">
                             <HeartHandshake size={18} /> <span>Fondo Solidario</span>
                         </Link>
+                        {hasPermission('gestionar sanciones') && (
+                            <Link href={route('telegram.borradores.index')} onClick={() => setShowingNavigationDropdown(false)} className="flex items-center space-x-3 px-4 py-2.5 rounded-xl font-bold bg-slate-50 text-slate-800">
+                                <Send size={18} /> <span>Borradores Telegram</span>
+                            </Link>
+                        )}
                     </div>
 
                     <div className="space-y-1">

@@ -28,6 +28,13 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    'telegram' => [
+        'token' => env('TELEGRAM_BOT_TOKEN'),
+        // IDs de usuario de Telegram autorizados, separados por coma (se obtienen con /id en el bot)
+        'usuarios_autorizados' => array_filter(array_map('trim', explode(',', (string) env('TELEGRAM_USUARIOS_AUTORIZADOS', '')))),
+        'webhook_secret' => env('TELEGRAM_WEBHOOK_SECRET'),
+    ],
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),

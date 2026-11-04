@@ -17,6 +17,9 @@ Route::get('/', function () {
     return redirect()->route('login');
 });
 
+// Bot de Telegram (protegido por el secreto del webhook, sin sesión)
+Route::post('/telegram/webhook', \App\Http\Controllers\TelegramWebhookController::class)->name('telegram.webhook');
+
 Route::get('/dashboard', [DashboardController::class, 'index'])
     ->middleware(['auth', 'verified'])
     ->name('dashboard');
@@ -117,6 +120,14 @@ Route::middleware('auth')->group(function () {
         Route::middleware(['permission:gestionar notas'])->group(function () {
             Route::post('/notas', [NotaDisciplinaController::class, 'store'])->name('tribunal.notas.store');
             Route::put('/notas/{nota}', [NotaDisciplinaController::class, 'update'])->name('tribunal.notas.update');
+        });
+
+        // Borradores recibidos por el bot de Telegram
+        Route::middleware(['permission:gestionar sanciones'])->group(function () {
+            Route::get('/borradores-telegram', [\App\Http\Controllers\TelegramBorradorController::class, 'index'])->name('telegram.borradores.index');
+            Route::get('/borradores-telegram/{borrador}', [\App\Http\Controllers\TelegramBorradorController::class, 'show'])->name('telegram.borradores.show');
+            Route::post('/borradores-telegram/{borrador}/aprobar', [\App\Http\Controllers\TelegramBorradorController::class, 'aprobar'])->name('telegram.borradores.aprobar');
+            Route::post('/borradores-telegram/{borrador}/descartar', [\App\Http\Controllers\TelegramBorradorController::class, 'descartar'])->name('telegram.borradores.descartar');
         });
 
         // PDFs - accesibles para todos los que pueden ver el tribunal
