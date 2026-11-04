@@ -135,22 +135,27 @@ class TelegramBot
             'fecha_resolucion' => $contexto['fecha_resolucion'] ?? null,
         ]);
 
-        $this->telegram->enviarMensaje($chatId, $this->resumen($borrador));
+        $this->telegram->enviarMensaje($chatId, $this->resumen($borrador, $contexto['avisos'] ?? []));
     }
 
-    public function resumen(TelegramBorrador $borrador): string
+    public function resumen(TelegramBorrador $borrador, array $avisosContexto = []): string
     {
         $e = fn (?string $s) => htmlspecialchars((string) $s, ENT_NOQUOTES);
         $pesos = fn (?int $monto) => $monto ? ' — $' . number_format($monto, 0, ',', '.') : '';
         $lineas = ["📝 <b>Borrador #{$borrador->id}</b> · " . self::NOMBRES_MODULO[$borrador->modulo]];
 
-        if ($borrador->fase || $borrador->numero_fecha || $borrador->fecha_resolucion) {
-            $lineas[] = trim(sprintf(
-                '%s %s %s',
-                $borrador->fase ? $e($borrador->fase->nombre) : '',
-                $borrador->numero_fecha ? "Fecha {$borrador->numero_fecha}" : '',
-                $borrador->fecha_resolucion?->format('d-m-Y') ?? ''
-            ));
+        // "🏆 Campeonato oficial 2026 · Clausura · Fecha 2 · 08-11-2026"
+        $torneo = array_filter([
+            $borrador->campeonato?->nombre,
+            $borrador->fase?->nombre,
+            $borrador->numero_fecha ? "Fecha {$borrador->numero_fecha}" : null,
+            $borrador->fecha_resolucion?->format('d-m-Y'),
+        ]);
+        if ($torneo) {
+            $lineas[] = '🏆 ' . $e(implode(' · ', $torneo));
+        }
+        foreach ($avisosContexto as $aviso) {
+            $lineas[] = '⚠️ ' . $e($aviso);
         }
 
         $totalAvisos = 0;
@@ -207,8 +212,17 @@ class TelegramBot
         }
 
         $lineas[] = '';
-        if ($borrador->modulo === DictadoParser::DISCIPLINA && (!$borrador->fase_id || !$borrador->numero_fecha)) {
-            $lineas[] = 'ℹ️ Falta indicar la fase y fecha (ej: <i>Fecha 2 Clausura 08-11-2026</i>). Se puede elegir al aprobar.';
+        $totalAvisos += count($avisosContexto);
+        if ($borrador->modulo === DictadoParser::DISCIPLINA) {
+            $faltan = array_keys(array_filter([
+                'campeonato y fase' => !$borrador->fase_id,
+                'N° de fecha' => !$borrador->numero_fecha,
+                'día' => !$borrador->fecha_resolucion,
+            ]));
+            if ($faltan) {
+                $lineas[] = 'ℹ️ Falta: ' . implode(', ', $faltan) . '. Puedes dictarlo en la primera línea '
+                    . '(ej: <i>Campeonato oficial 2026, Clausura, fecha 2, 8 de noviembre</i>) o elegirlo al aprobar.';
+            }
         }
         $lineas[] = $totalAvisos
             ? "Revisa los {$totalAvisos} aviso(s) y aprueba en el sistema:"
@@ -292,13 +306,13 @@ class TelegramBot
             : implode("\n", [
                 '⚖️ <b>Disciplina</b> — <i>club, jugador, artículo, motivo, sanción</i>',
                 '<code>Disciplina',
-                'Fecha 2 Clausura 08-11-2026',
+                'Campeonato oficial 2026, Clausura, fecha 2, 8 de noviembre',
                 'Carmelo de Praga, Héctor Caneo Navarrete, 210 H, conducta violenta, 4 partidos',
                 'Estrella, Kevin Núñez Núñez, 211 P, doble amonestación, 1+1 partidos, R',
                 'Multa, Valencia, 50.000, no presentación serie femenina',
                 'Carta de amonestación al Sr. Oscar Girola DT, Santa Margarita, mal comportamiento, 10.000',
                 'Fondo 32, Alianza, Julio Astete Valenzuela, 13.262.615-4, 14 días</code>',
-                '• La línea «Fecha …» (fase y día) es opcional.',
+                '• Primera línea: campeonato, fase, N° de fecha y día (también «Fecha 2 Clausura 08-11-2026»).',
                 '• R marca reincidencia: «1 partido, R» o «1+1 partidos» quedan en 2.',
                 '• Fondo: indica % (100%) o días de reposo (14 días, fractura).',
             ]);

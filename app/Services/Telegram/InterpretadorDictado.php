@@ -3,8 +3,8 @@
 namespace App\Services\Telegram;
 
 use App\Helpers\RutHelper;
+use App\Models\Campeonato;
 use App\Models\Club;
-use App\Models\Fase;
 use App\Models\FondoSolidario;
 use App\Models\Jugador;
 use App\Models\Sancion;
@@ -43,11 +43,9 @@ class InterpretadorDictado
     {
         $resultado = $this->parser->parse($texto, $modulo);
 
-        $contexto = $resultado['contexto'];
-        if (!empty($contexto['fase_texto'])) {
-            $fase = $this->buscarFase($contexto['fase_texto']);
-            $contexto['fase_id'] = $fase?->id;
-            $contexto['campeonato_id'] = $fase?->campeonato_id;
+        $contexto = $resultado['contexto'] + ['avisos' => []];
+        if (!empty($contexto['torneo_texto'])) {
+            $contexto = array_merge($contexto, $this->resolverTorneo($contexto['torneo_texto'], $contexto['numero_fecha'] ?? null));
         }
 
         $items = array_map(fn (array $item) => match ($item['tipo']) {
@@ -309,16 +307,44 @@ class InterpretadorDictado
         return $motivo ? trim(preg_replace('/\s*\(.*\)\s*$/', '', $motivo)) : null;
     }
 
-    private function buscarFase(string $texto): ?Fase
+    /**
+     * "campeonato oficial 2026 clausura" -> campeonato y fase activos cuyo nombre aparece en el texto.
+     * El año es opcional ("campeonato oficial", "liguilla infantil") y gana el nombre más largo
+     * ("definicion apertura" antes que "apertura").
+     */
+    private function resolverTorneo(string $texto, ?int $numeroFecha): array
     {
-        $buscado = DictadoParser::normalizar($texto);
+        $buscado = ' ' . DictadoParser::normalizar($texto) . ' ';
+        $sinAnio = fn (string $nombre) => trim(preg_replace('/\b(19|20)\d{2}\b/', '', DictadoParser::normalizar($nombre)));
+        $aparece = fn (string $nombre) => str_contains($buscado, ' ' . DictadoParser::normalizar($nombre) . ' ')
+            || str_contains($buscado, ' ' . $sinAnio($nombre) . ' ');
+        $masLargo = fn ($coleccion) => $coleccion->filter(fn ($m) => $aparece($m->nombre))->sortByDesc(fn ($m) => mb_strlen($m->nombre))->first();
 
-        // Exacta primero; si no, la de nombre más corto ("Apertura" antes que "Definición Apertura 2026")
-        return Fase::all()
-            ->filter(fn (Fase $f) => str_contains(DictadoParser::normalizar($f->nombre), $buscado)
-                || str_contains($buscado, DictadoParser::normalizar($f->nombre)))
-            ->sortBy(fn (Fase $f) => [DictadoParser::normalizar($f->nombre) !== $buscado, mb_strlen($f->nombre), -$f->id])
-            ->first();
+        $campeonatos = Campeonato::with('fases')->where('estado', 'ACTIVO')->get();
+        $campeonato = $masLargo($campeonatos);
+        $fase = $masLargo($campeonato ? $campeonato->fases : $campeonatos->flatMap->fases);
+
+        // Liguillas: el campeonato tiene una sola fase
+        if (!$fase && $campeonato?->fases->count() === 1) {
+            $fase = $campeonato->fases->first();
+        }
+        $campeonato ??= $fase ? $campeonatos->firstWhere('id', $fase->campeonato_id) : null;
+
+        $avisos = [];
+        if (!$fase) {
+            $avisos[] = $campeonato
+                ? "Falta la fase de {$campeonato->nombre} (" . $campeonato->fases->pluck('nombre')->implode(', ') . ').'
+                : "No reconocí el campeonato o la fase \"{$texto}\".";
+        } elseif ($numeroFecha && $numeroFecha > $fase->cantidad_fechas) {
+            $avisos[] = "{$fase->nombre} tiene {$fase->cantidad_fechas} fecha(s); se indicó la fecha {$numeroFecha}.";
+        }
+
+        return [
+            'campeonato_id' => $campeonato?->id,
+            'campeonato_nombre' => $campeonato?->nombre,
+            'fase_id' => $fase?->id,
+            'avisos' => $avisos,
+        ];
     }
 
     private function normalizarClub(string $texto): string

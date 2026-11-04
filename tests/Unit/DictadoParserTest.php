@@ -83,9 +83,35 @@ class DictadoParserTest extends TestCase
         $resultado = $this->parse("Fecha 1 Clausura 01-11-2026\nSan Carlos, Raúl Valencia Contreras, 211 N, faltas reiteradas, 1 partido");
 
         $this->assertSame(1, $resultado['contexto']['numero_fecha']);
-        $this->assertSame('Clausura', $resultado['contexto']['fase_texto']);
+        $this->assertSame('clausura', $resultado['contexto']['torneo_texto']);
         $this->assertSame('2026-11-01', $resultado['contexto']['fecha_resolucion']);
         $this->assertCount(1, $resultado['items']);
+    }
+
+    public function test_contexto_dictado_con_campeonato_y_dia_en_palabras(): void
+    {
+        $contexto = $this->parse("Campeonato oficial 2026, Clausura, fecha dos, 8 de noviembre de 2026\nSanta Rosa, Javier Vera Llano, 211 P, doble amonestación, 1 partido")['contexto'];
+
+        $this->assertSame(2, $contexto['numero_fecha']);
+        $this->assertSame('2026-11-08', $contexto['fecha_resolucion']);
+        $this->assertSame('campeonato oficial 2026 clausura', $contexto['torneo_texto']);
+    }
+
+    public function test_contexto_de_liguilla_sin_anio_en_la_fecha(): void
+    {
+        $contexto = $this->parse("Liguilla Senior 35, fecha 3, 15 de noviembre\nValencia, Pedro Pérez, 211 P, doble amonestación, 1 partido")['contexto'];
+
+        $this->assertSame(3, $contexto['numero_fecha']);
+        $this->assertSame(date('Y') . '-11-15', $contexto['fecha_resolucion']);
+        $this->assertSame('liguilla senior 35', $contexto['torneo_texto']);
+    }
+
+    public function test_sancion_en_fechas_no_se_confunde_con_contexto(): void
+    {
+        $resultado = $this->parse('Valencia, Pedro Pérez, 211 P, doble amonestación, 2 fechas');
+
+        $this->assertSame([], $resultado['contexto']);
+        $this->assertSame([2, 'PARTIDOS'], [$resultado['items'][0]['cantidad'], $resultado['items'][0]['unidad']]);
     }
 
     public function test_linea_incompleta_genera_avisos(): void

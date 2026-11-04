@@ -9,7 +9,7 @@ use Illuminate\Support\Str;
  * Una línea por registro, campos separados por coma.
  *
  * Disciplina:
- *   Fecha 1 Clausura 01-11-2026                                   (contexto, opcional)
+ *   Campeonato oficial 2026, Clausura, fecha 1, 1 de noviembre    (contexto, opcional; también "Fecha 1 Clausura 01-11-2026")
  *   Carmelo de Praga, Héctor Caneo Navarrete, 210 H, conducta violenta, 4 partidos
  *   Estrella, Maximiliano Navarrete Zamora, 211 P, doble amonestación, 1+1 partidos, R
  *   Multa, Valencia, 50.000, no presentación serie femenina
@@ -30,7 +30,12 @@ class DictadoParser
     private const NUMEROS = [
         'un' => 1, 'uno' => 1, 'una' => 1, 'dos' => 2, 'tres' => 3, 'cuatro' => 4,
         'cinco' => 5, 'seis' => 6, 'siete' => 7, 'ocho' => 8, 'nueve' => 9,
-        'diez' => 10, 'once' => 11, 'doce' => 12,
+        'diez' => 10, 'once' => 11, 'doce' => 12, 'trece' => 13, 'catorce' => 14, 'quince' => 15,
+    ];
+
+    private const MESES = [
+        'enero' => 1, 'febrero' => 2, 'marzo' => 3, 'abril' => 4, 'mayo' => 5, 'junio' => 6, 'julio' => 7,
+        'agosto' => 8, 'septiembre' => 9, 'setiembre' => 9, 'octubre' => 10, 'noviembre' => 11, 'diciembre' => 12,
     ];
 
     private const UNIDADES = [
@@ -83,7 +88,8 @@ class DictadoParser
 
             $norm = self::normalizar($linea);
 
-            if (preg_match('/^fecha\s+(\d+|' . $this->patronNumeros() . ')\b/', $norm)) {
+            // "Campeonato oficial 2026, Clausura, fecha 2, 8 de noviembre" o "Fecha 2 Clausura 08-11-2026"
+            if (preg_match('/^(campeonato|liguilla|torneo)\b/', $norm) || preg_match('/\bfecha (\d+|' . $this->patronNumeros() . ')\b/', $norm)) {
                 $contexto = array_merge($contexto, $this->parseContexto($linea, $norm));
                 continue;
             }
@@ -104,17 +110,22 @@ class DictadoParser
 
     private function parseContexto(string $linea, string $norm): array
     {
-        preg_match('/^fecha\s+(\d+|' . $this->patronNumeros() . ')\b/', $norm, $m);
-        $contexto = ['numero_fecha' => $this->numero($m[1])];
+        $contexto = [];
+        $patronFecha = '/\bfecha (\d+|' . $this->patronNumeros() . ')\b/';
 
+        if (preg_match($patronFecha, $norm, $m)) {
+            $contexto['numero_fecha'] = $this->numero($m[1]);
+        }
         if ($fecha = $this->fecha($linea)) {
             $contexto['fecha_resolucion'] = $fecha;
         }
 
-        $resto = preg_replace('/\b\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4}\b/', '', $linea);
-        $resto = trim(preg_replace('/^\s*fecha\s+\S+/iu', '', $resto), " ,.-");
+        // Lo que queda (campeonato y/o fase) se busca después en la base
+        $resto = self::normalizar(preg_replace('/\b\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4}\b/', ' ', $linea));
+        $resto = preg_replace('/\b\d{1,2} de (' . implode('|', array_keys(self::MESES)) . ')( del? \d{4})?\b/', ' ', $resto);
+        $resto = trim(preg_replace([$patronFecha, '/\s+/'], ['', ' '], $resto));
         if ($resto !== '') {
-            $contexto['fase_texto'] = $resto;
+            $contexto['torneo_texto'] = $resto;
         }
 
         return $contexto;
@@ -436,16 +447,20 @@ class DictadoParser
     }
 
     /**
-     * Primera fecha dd-mm-aaaa del texto -> aaaa-mm-dd
+     * Primera fecha del texto -> aaaa-mm-dd. Acepta "08-11-2026" y "8 de noviembre (de 2026)";
+     * sin año, se asume el año en curso.
      */
     private function fecha(string $texto): ?string
     {
-        if (!preg_match('/\b(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{2,4})\b/', $texto, $f)) {
+        if (preg_match('/\b(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{2,4})\b/', $texto, $f)) {
+            [$dia, $mes, $anio] = [(int) $f[1], (int) $f[2], strlen($f[3]) === 2 ? 2000 + (int) $f[3] : (int) $f[3]];
+        } elseif (preg_match('/\b(\d{1,2}) de (' . implode('|', array_keys(self::MESES)) . ')(?: del? (\d{4}))?\b/', self::normalizar($texto), $f)) {
+            [$dia, $mes, $anio] = [(int) $f[1], self::MESES[$f[2]], isset($f[3]) ? (int) $f[3] : (int) date('Y')];
+        } else {
             return null;
         }
-        $anio = strlen($f[3]) === 2 ? 2000 + (int) $f[3] : (int) $f[3];
 
-        return checkdate((int) $f[2], (int) $f[1], $anio) ? sprintf('%04d-%02d-%02d', $anio, $f[2], $f[1]) : null;
+        return checkdate($mes, $dia, $anio) ? sprintf('%04d-%02d-%02d', $anio, $mes, $dia) : null;
     }
 
     private function campos(string $linea): array
