@@ -141,7 +141,7 @@ class DictadoParser
             "/{$a}\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4}{$z}/u",
             // Artículo ("artículo 211 letra N", "211 N", "dos 10 H") y sanción ("1+1 partidos R", "6 meses")
             "/{$a}(?:art(?:[íi]culo)?\.?\s*)?(?:\d{3}|dos\s+\d{2})\s*(?:letra\s+)?[a-zñ]{$z}/iu",
-            "/{$a}{$num}(?:\s*(?:\+|m[aá]s)\s*{$num})?\s+(?:partidos?|fechas?|mes(?:es)?|a[ñn]os?){$z}(?:\s+(?:r|erre|reincidencia|reincidente){$z})?/iu",
+            "/{$a}{$num}(?:\s+partidos?)?(?:\s*(?:\+|m[aá]s)\s*{$num})?\s+(?:partidos?|fechas?|mes(?:es)?|a[ñn]os?){$z}(?:\s+(?:r|erre|reincidencia|reincidente){$z})?/iu",
             // Sanción de amonestación ("doble amonestación" es un motivo, y "carta de amonestación" una nota)
             "/{$a}amonestaci[oó]n\s+escrita{$z}/iu",
             // Datos de fondos y multas
@@ -274,9 +274,10 @@ class DictadoParser
 
         foreach (preg_split('/\R+/u', self::saltosDictados($texto)) ?: [] as $linea) {
             $linea = trim($this->corregirDictado($linea), " \t.-•*");
-            // Leído de corrido, sin decir "coma"
-            if ($largoClub && $modulo === self::DISCIPLINA && !str_contains($linea, ',')) {
-                $linea = $this->insertarComas($linea, $largoClub);
+            // En disciplina se separa por lo reconocido (club, artículo, sanción, fechas, montos) y no por las
+            // comas: el teclado del celular las pone solo en las pausas, o no las pone si se lee de corrido
+            if ($largoClub && $modulo === self::DISCIPLINA) {
+                $linea = $this->insertarComas(preg_replace('/[,;]|\.(?=\s|$)/u', ' ', $linea), $largoClub);
             }
             $campos = $this->unirLetraDelArticulo($this->campos($linea));
             if (!$campos) {
@@ -331,7 +332,7 @@ class DictadoParser
                     while (isset($campos[$k + 1])) {
                         $siguiente = self::normalizar($campos[$k + 1]);
                         $tieneArticulo = (bool) array_filter($actual, fn ($c) => $this->articulo(self::normalizar($c)));
-                        if (!in_array($siguiente, ['r', 'reincidencia', 'reincidente', 'reincide'], true)
+                        if (!in_array($siguiente, ['r', 'erre', 'reincidencia', 'reincidente', 'reincide'], true)
                             && ($tieneArticulo || !$this->articulo($siguiente))) {
                             break;
                         }
@@ -571,7 +572,7 @@ class DictadoParser
         foreach ($this->campos($linea) as $campo) {
             $norm = self::normalizar($campo, '+');
 
-            if (in_array($norm, ['r', 'reincidencia', 'reincidente', 'reincide'], true)) {
+            if (in_array($norm, ['r', 'erre', 'reincidencia', 'reincidente', 'reincide'], true)) {
                 $item['reincidencia'] = true;
                 continue;
             }
@@ -720,7 +721,7 @@ class DictadoParser
         }
 
         $num = '(\d+|' . $this->patronNumeros() . ')';
-        $patron = '/^' . $num . '(?:\s*(?:\+|mas)\s*' . $num . ')?\s*(' . implode('|', array_keys(self::UNIDADES)) . ')(?:\s+(r|reincidencia))?$/';
+        $patron = '/^' . $num . '(?:\s+partidos?)?(?:\s*(?:\+|mas)\s*' . $num . ')?\s*(' . implode('|', array_keys(self::UNIDADES)) . ')(?:\s+(r|erre|reincidencia|reincidente))?$/';
 
         if (!preg_match($patron, $norm, $m)) {
             return null;

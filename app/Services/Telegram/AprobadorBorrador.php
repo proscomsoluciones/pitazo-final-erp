@@ -174,10 +174,15 @@ class AprobadorBorrador
 
         if ($aplicaReincidencia) {
             $previas = Sancion::where('jugador_id', $jugador->id)->where('tipo_sancion', '!=', 'AMONESTACION')->count();
-            $observacion .= " [Reincidencia: {$previas} sanción(es) previa(s)]";
-            if ($unidad === 'PARTIDOS' && $cantidad > 1) {
-                $base = $cantidad - 1;
-                $tipoFalta .= sprintf(' (%d partido%s + 1 por reincidencia = %d)', $base, $base === 1 ? '' : 's', $cantidad);
+            if ($unidad === 'PARTIDOS') {
+                // Misma nota que deja el formulario del Tribunal
+                $base = min((int) ($item['cantidad_base'] ?? $cantidad), $cantidad);
+                $observacion .= sprintf(
+                    ' [Base: %d partido(s) + Reincidencia (%d expulsión/es previa/s): +%d partido(s) = Total: %d partidos]',
+                    $base, $previas, $cantidad - $base, $cantidad
+                );
+            } else {
+                $observacion .= " [Reincidencia: {$previas} sanción(es) previa(s)]";
             }
         }
 

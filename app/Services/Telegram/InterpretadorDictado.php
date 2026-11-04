@@ -5,6 +5,7 @@ namespace App\Services\Telegram;
 use App\Helpers\RutHelper;
 use App\Models\Campeonato;
 use App\Models\Club;
+use App\Models\Fase;
 use App\Models\FondoSolidario;
 use App\Models\Jugador;
 use App\Models\Sancion;
@@ -54,8 +55,10 @@ class InterpretadorDictado
             $contexto = array_merge($contexto, $this->resolverTorneo($contexto['torneo_texto'], $contexto['numero_fecha'] ?? null));
         }
 
+        $esLiguilla = !empty($contexto['fase_id']) && str_contains(strtolower((string) Fase::find($contexto['fase_id'])?->nombre), 'liguilla');
+
         $items = array_map(fn (array $item) => match ($item['tipo']) {
-            'SANCION' => $this->resolverSancion($item),
+            'SANCION' => $this->resolverSancion($item, $esLiguilla),
             'NOTA' => $this->resolverNota($item),
             'FONDO' => $this->resolverFondo($item),
             'EXPEDIENTE' => $this->resolverExpediente($item, $contexto['fecha_resolucion'] ?? now()->toDateString()),
@@ -65,7 +68,43 @@ class InterpretadorDictado
         return ['contexto' => $contexto, 'items' => $items];
     }
 
-    private function resolverSancion(array $item): array
+    /**
+     * Misma regla del formulario del Tribunal: con sanciones previas (sin contar amonestaciones) el jugador es
+     * reincidente y se suma +1 partido por cada una a la cantidad base; no aplica en liguillas ni en sanciones por tiempo.
+     */
+    private function aplicarReincidencia(array $item, bool $esLiguilla): array
+    {
+        $previas = $item['sanciones_previas'];
+        $base = $item['cantidad_base'] ?? $item['cantidad'];
+        $dictado = $item['cantidad'];
+        // El "+1" que el parser sumó por la R dictada se reemplaza por el cálculo del sistema
+        $item['avisos'] = array_values(array_filter($item['avisos'], fn ($a) => !str_starts_with($a, 'Se sumó +1 partido')));
+
+        if ($item['unidad'] !== 'PARTIDOS' || !$base) {
+            if ($previas > 0 && $item['unidad'] !== 'AMONESTACION') {
+                $item['reincidencia'] = true;
+                $item['avisos'][] = "Reincidente: {$previas} sanción(es) previa(s).";
+            }
+            return $item;
+        }
+
+        if ($previas > 0 && $esLiguilla) {
+            $item['reincidencia'] = false;
+            $item['cantidad'] = $base;
+            $item['avisos'][] = "Liguilla: no se aplica reincidencia por partidos ({$previas} sanción(es) previa(s)); queda la sanción base.";
+        } elseif ($previas > 0) {
+            $item['reincidencia'] = true;
+            $item['cantidad'] = $base + $previas;
+            $item['avisos'][] = "Reincidente ({$previas} sanción(es) previa(s)): {$base} + {$previas} = {$item['cantidad']} partido(s)."
+                . ($dictado !== $item['cantidad'] ? " En el dictado venía {$dictado}." : '');
+        } elseif ($item['reincidencia']) {
+            $item['avisos'][] = "Se dictó R, pero no hay sanciones previas registradas; queda en {$dictado} partido(s) como en el acta.";
+        }
+
+        return $item;
+    }
+
+    private function resolverSancion(array $item, bool $esLiguilla = false): array
     {
         $club = $item['club_texto'] ? $this->buscarClub($item['club_texto']) : null;
         $item['club_id'] = $club?->id;
@@ -96,11 +135,7 @@ class InterpretadorDictado
             }
         }
 
-        if ($item['reincidencia'] && $item['sanciones_previas'] === 0) {
-            $item['avisos'][] = 'Tiene marca R, pero no hay sanciones previas registradas.';
-        } elseif (!$item['reincidencia'] && $item['sanciones_previas'] > 0) {
-            $item['avisos'][] = "Tiene {$item['sanciones_previas']} sanción(es) previa(s) y no se marcó R.";
-        }
+        $item = $this->aplicarReincidencia($item, $esLiguilla);
 
         if ($item['articulo']) {
             $motivos = $this->motivosDelArticulo($item['articulo']);
