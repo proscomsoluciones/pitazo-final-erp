@@ -40,13 +40,13 @@ class EticaController extends Controller
     public function store(Request $request)
     {
         $data = $request->validate([
-            'tipo_oficio'                => 'required|in:INVESTIGACION,CITACION,INHABILITACION,RESOLUCION',
+            'tipo_oficio'                => 'required|in:INVESTIGACION,CITACION,INHABILITACION,AMONESTACION,RESOLUCION',
             'club_id'                    => 'nullable|exists:clubes,id',
             'jugador_id'                 => 'nullable|exists:jugadores,id',
             'nombre_involucrado'         => 'nullable|string|max:255',
             'rut_involucrado'            => 'nullable|string|max:20',
             'articulo_reglamento'        => 'nullable|string|max:255',
-            'tipo_involucrado'           => 'required|in:JUGADOR,DIRIGENTE,CLUB',
+            'tipo_involucrado'           => 'required|in:JUGADOR,DIRIGENTE,TURNO,CLUB',
             'campeonato_id'              => 'nullable|exists:campeonatos,id',
             'fase_id'                    => 'nullable|exists:fases,id',
             'numero_fecha'               => 'nullable|integer|min:1',
@@ -56,7 +56,7 @@ class EticaController extends Controller
             'lugar_citacion'             => 'nullable|string|max:255',
             'fecha_inicio_inhabilitacion'=> 'nullable|date',
             'fecha_fin_inhabilitacion'   => 'nullable|date',
-            'estado'                     => 'required|in:EN_INVESTIGACION,CITADO,INHABILITADO,RESUELTO,ARCHIVADO',
+            'estado'                     => 'required|in:EN_INVESTIGACION,CITADO,INHABILITADO,AMONESTADO,RESUELTO,ARCHIVADO',
             'detalles_resolucion'        => 'nullable|string',
             'observaciones'              => 'nullable|string',
         ]);
@@ -71,6 +71,7 @@ class EticaController extends Controller
             'EN_INVESTIGACION' => 'INVESTIGACION',
             'CITADO'           => 'CITACION',
             'INHABILITADO'     => 'INHABILITACION',
+            'AMONESTADO'       => 'AMONESTACION',
             'RESUELTO'         => 'RESOLUCION',
             'ARCHIVADO'        => 'RESOLUCION',
         ];
@@ -90,13 +91,13 @@ class EticaController extends Controller
         $caso = CasoEtica::findOrFail($id);
 
         $data = $request->validate([
-            'tipo_oficio'                => 'required|in:INVESTIGACION,CITACION,INHABILITACION,RESOLUCION',
+            'tipo_oficio'                => 'required|in:INVESTIGACION,CITACION,INHABILITACION,AMONESTACION,RESOLUCION',
             'club_id'                    => 'nullable|exists:clubes,id',
             'jugador_id'                 => 'nullable|exists:jugadores,id',
             'nombre_involucrado'         => 'nullable|string|max:255',
             'rut_involucrado'            => 'nullable|string|max:20',
             'articulo_reglamento'        => 'nullable|string|max:255',
-            'tipo_involucrado'           => 'required|in:JUGADOR,DIRIGENTE,CLUB',
+            'tipo_involucrado'           => 'required|in:JUGADOR,DIRIGENTE,TURNO,CLUB',
             'campeonato_id'              => 'nullable|exists:campeonatos,id',
             'fase_id'                    => 'nullable|exists:fases,id',
             'numero_fecha'               => 'nullable|integer|min:1',
@@ -106,7 +107,7 @@ class EticaController extends Controller
             'lugar_citacion'             => 'nullable|string|max:255',
             'fecha_inicio_inhabilitacion'=> 'nullable|date',
             'fecha_fin_inhabilitacion'   => 'nullable|date',
-            'estado'                     => 'required|in:EN_INVESTIGACION,CITADO,INHABILITADO,RESUELTO,ARCHIVADO',
+            'estado'                     => 'required|in:EN_INVESTIGACION,CITADO,INHABILITADO,AMONESTADO,RESUELTO,ARCHIVADO',
             'detalles_resolucion'        => 'nullable|string',
             'observaciones'              => 'nullable|string',
         ]);
@@ -116,6 +117,7 @@ class EticaController extends Controller
             'EN_INVESTIGACION' => 'INVESTIGACION',
             'CITADO'           => 'CITACION',
             'INHABILITADO'     => 'INHABILITACION',
+            'AMONESTADO'       => 'AMONESTACION',
             'RESUELTO'         => 'RESOLUCION',
             'ARCHIVADO'        => 'RESOLUCION',
         ];
@@ -146,7 +148,7 @@ class EticaController extends Controller
     public function emitirOficio(int $id, string $tipo)
     {
         $tipoUpper = strtoupper($tipo);
-        if (!in_array($tipoUpper, ['INVESTIGACION', 'CITACION', 'INHABILITACION', 'RESOLUCION'])) {
+        if (!in_array($tipoUpper, ['INVESTIGACION', 'CITACION', 'INHABILITACION', 'AMONESTACION', 'RESOLUCION'])) {
             $tipoUpper = 'INVESTIGACION';
         }
 

@@ -52,44 +52,90 @@ class SancionController extends Controller
 
     public function store(Request $request)
     {
-        $data = $request->validate([
-            'campeonato_id' => 'required|exists:campeonatos,id',
-            'fase_id' => 'required|exists:fases,id',
-            'numero_fecha' => 'required|integer|min:1',
-            'club_id' => 'required|exists:clubes,id',
-            'jugador_rut' => ['required', 'string', 'max:20', new RutRule()],
-            'jugador_nombre' => 'required|string|max:255',
+        $tipoInvolucrado = $request->input('tipo_involucrado', 'JUGADOR');
+        if (!in_array($tipoInvolucrado, ['JUGADOR', 'TURNO', 'DIRIGENTE', 'CLUB'])) {
+            $tipoInvolucrado = 'JUGADOR';
+        }
+
+        $rules = [
+            'campeonato_id'       => 'required|exists:campeonatos,id',
+            'fase_id'             => 'required|exists:fases,id',
+            'numero_fecha'        => 'required|integer|min:1',
+            'tipo_involucrado'    => 'nullable|in:JUGADOR,TURNO,DIRIGENTE,CLUB',
+            'club_id'             => $tipoInvolucrado === 'TURNO' ? 'nullable|exists:clubes,id' : 'required|exists:clubes,id',
+            'jugador_rut'         => ['nullable', 'string', 'max:20'],
+            'jugador_nombre'      => $tipoInvolucrado === 'CLUB' ? 'nullable|string|max:255' : 'required|string|max:255',
             'articulo_reglamento' => 'required|string|max:255',
-            'tipo_falta' => 'required|string|max:255',
-            'observacion' => 'nullable|string',
-            'cantidad_sancion' => 'required|integer|min:1',
-            'tipo_sancion' => 'required|in:PARTIDOS,TIEMPO',
-            'unidad_tiempo' => ['required', 'in:PARTIDOS,MESES,AÑOS', $this->unidadTiempoCoincideConTipo($request)],
-            'fecha_resolucion' => 'required|date',
-        ]);
+            'tipo_falta'          => 'required|string|max:255',
+            'observacion'         => 'nullable|string',
+            'cantidad_sancion'    => 'required|integer|min:1',
+            'tipo_sancion'        => 'required|in:PARTIDOS,TIEMPO,AMONESTACION',
+            'unidad_tiempo'       => ['required', 'in:PARTIDOS,MESES,AÑOS,AMONESTACION', $this->unidadTiempoCoincideConTipo($request)],
+            'fecha_resolucion'    => 'required|date',
+        ];
 
-        // Formato XXXXXXXX-X, o PENDIENTE-NNNN para jugadores sin RUT
-        $data['jugador_rut'] = RutHelper::normalizar($data['jugador_rut']);
+        $data = $request->validate($rules);
+        $data['tipo_involucrado'] = $tipoInvolucrado;
+        $data['club_id'] = !empty($data['club_id']) ? $data['club_id'] : null;
 
-        // Autocreate/Update Jugador based on RUT
-        $jugador = Jugador::updateOrCreate(
-            ['rut' => $data['jugador_rut']],
-            [
-                'nombre' => $data['jugador_nombre'],
-                'club_id' => $data['club_id'],
-            ]
-        );
+        if ($tipoInvolucrado === 'JUGADOR') {
+            $rutInput = trim((string) ($data['jugador_rut'] ?? ''));
+            $data['jugador_rut'] = $rutInput !== '' ? RutHelper::normalizar($rutInput) : null;
 
-        $data['jugador_id'] = $jugador->id;
-        
+            if ($data['jugador_rut']) {
+                $jugador = Jugador::updateOrCreate(
+                    ['rut' => $data['jugador_rut']],
+                    [
+                        'nombre'  => $data['jugador_nombre'],
+                        'club_id' => $data['club_id'],
+                    ]
+                );
+            } else {
+                $jugador = Jugador::firstOrCreate(
+                    [
+                        'nombre'  => $data['jugador_nombre'],
+                        'club_id' => $data['club_id'],
+                    ],
+                    ['rut' => null]
+                );
+            }
+
+            $data['jugador_id'] = $jugador->id;
+            $data['nombre_involucrado'] = $jugador->nombre;
+            $data['rut_involucrado'] = $jugador->rut;
+            $reincidenciasPrevias = Sancion::where('jugador_id', $jugador->id)
+                ->where('tipo_sancion', '!=', 'AMONESTACION')
+                ->count();
+        } elseif ($tipoInvolucrado === 'CLUB') {
+            $clubObj = Club::find($data['club_id']);
+            $data['jugador_id'] = null;
+            $data['nombre_involucrado'] = $clubObj?->name ?? 'Club';
+            $data['rut_involucrado'] = null;
+            $reincidenciasPrevias = 0;
+        } else {
+            // TURNO o DIRIGENTE
+            $rutNorm = !empty($data['jugador_rut']) ? RutHelper::normalizar($data['jugador_rut']) : null;
+            $data['jugador_id'] = null;
+            $data['nombre_involucrado'] = $data['jugador_nombre'];
+            $data['rut_involucrado'] = $rutNorm;
+
+            $reincidenciasPrevias = Sancion::where('tipo_involucrado', $tipoInvolucrado)
+                ->where('tipo_sancion', '!=', 'AMONESTACION')
+                ->where(function ($q) use ($rutNorm, $data) {
+                    if ($rutNorm && !RutHelper::esPendiente($rutNorm)) {
+                        $q->where('rut_involucrado', $rutNorm);
+                    } else {
+                        $q->where('nombre_involucrado', $data['jugador_nombre']);
+                    }
+                })
+                ->count();
+        }
+
         $fase = Fase::find($data['fase_id']);
         $esLiguilla = $fase && str_contains(strtolower($fase->nombre), 'liguilla');
 
-        // Verificar antecedentes previos (Reincidencia)
-        $reincidenciasPrevias = Sancion::where('jugador_id', $jugador->id)->count();
-
-        // En Liguilla NO se aplica reincidencia por partidos, solo por tiempo (MESES/AÑOS)
-        if ($reincidenciasPrevias > 0 && !($esLiguilla && $data['unidad_tiempo'] === 'PARTIDOS')) {
+        // En Liguilla NO se aplica reincidencia por partidos, ni tampoco en Cartas de Amonestación
+        if ($data['tipo_sancion'] !== 'AMONESTACION' && $reincidenciasPrevias > 0 && !($esLiguilla && $data['unidad_tiempo'] === 'PARTIDOS')) {
             $notaReincidencia = "[Reincidencia: {$reincidenciasPrevias} sanción(es) previa(s)]";
             if (empty($data['observacion'])) {
                 $data['observacion'] = $notaReincidencia;
@@ -104,15 +150,22 @@ class SancionController extends Controller
                 $data['unidad_tiempo'],
                 $data['fecha_resolucion']
             );
+        } elseif ($data['tipo_sancion'] === 'AMONESTACION') {
+            $data['cantidad_sancion'] = 1;
+            $data['unidad_tiempo'] = 'AMONESTACION';
+            $data['fecha_termino_cronologica'] = null;
+            $data['estado'] = 'CUMPLIDO';
         } else {
             $data['fecha_termino_cronologica'] = null;
         }
 
         $sancion = Sancion::create($data);
 
-        $clubName = Club::find($data['club_id'])?->name ?? 'Club';
-        $logReincidencia = ($reincidenciasPrevias > 0 && !($esLiguilla && $data['unidad_tiempo'] === 'PARTIDOS')) ? " [Reincidente #{$reincidenciasPrevias}]" : "";
-        \App\Support\Auditor::log('CREAR', 'TRIBUNAL', "Ingresó nueva sanción a {$data['jugador_nombre']} ({$clubName}) por {$data['cantidad_sancion']} {$data['unidad_tiempo']}{$logReincidencia}.");
+        $clubName = $data['club_id'] ? (Club::find($data['club_id'])?->name ?? 'Club') : 'Sin Club';
+        $sujetoLabel = $data['nombre_involucrado'] ?? ($data['jugador_nombre'] ?? $clubName);
+        $detalleSancionLog = $data['tipo_sancion'] === 'AMONESTACION' ? 'Amonestación Escrita' : "{$data['cantidad_sancion']} {$data['unidad_tiempo']}";
+        $logReincidencia = ($data['tipo_sancion'] !== 'AMONESTACION' && $reincidenciasPrevias > 0 && !($esLiguilla && $data['unidad_tiempo'] === 'PARTIDOS')) ? " [Reincidente #{$reincidenciasPrevias}]" : "";
+        \App\Support\Auditor::log('CREAR', 'TRIBUNAL', "Ingresó nueva sanción [{$tipoInvolucrado}] a {$sujetoLabel} ({$clubName}) por {$detalleSancionLog}{$logReincidencia}.");
 
         return redirect()->back()->with('success', 'Sanción registrada correctamente.');
     }
@@ -121,43 +174,72 @@ class SancionController extends Controller
     {
         $sancion = Sancion::findOrFail($id);
 
-        $data = $request->validate([
-            'campeonato_id' => 'required|exists:campeonatos,id',
-            'fase_id' => 'required|exists:fases,id',
-            'numero_fecha' => 'required|integer|min:1',
-            'club_id' => 'required|exists:clubes,id',
-            'jugador_rut' => ['required', 'string', 'max:20', new RutRule()],
-            'jugador_nombre' => 'required|string|max:255',
-            'articulo_reglamento' => 'required|string|max:255',
-            'tipo_falta' => 'required|string|max:255',
-            'observacion' => 'nullable|string',
-            'cantidad_sancion' => 'required|integer|min:1',
-            'tipo_sancion' => 'required|in:PARTIDOS,TIEMPO',
-            'unidad_tiempo' => ['required', 'in:PARTIDOS,MESES,AÑOS', $this->unidadTiempoCoincideConTipo($request)],
-            'fecha_resolucion' => 'required|date',
-            'estado' => 'required|in:ACTIVO,CUMPLIDO',
-        ]);
-
-        // Formato XXXXXXXX-X, o PENDIENTE-NNNN para jugadores sin RUT
-        $data['jugador_rut'] = RutHelper::normalizar($data['jugador_rut']);
-
-        $jugador = Jugador::where('rut', $data['jugador_rut'])->first();
-        $jugadorActual = $sancion->jugador;
-
-        // Si el jugador de la sanción tenía RUT provisorio y se ingresa su RUT real (aún no registrado),
-        // se completa ese mismo jugador en vez de crear un duplicado.
-        if (!$jugador && $jugadorActual && RutHelper::esPendiente($jugadorActual->rut) && !RutHelper::esPendiente($data['jugador_rut'])) {
-            $jugador = $jugadorActual;
+        $tipoInvolucrado = $request->input('tipo_involucrado', $sancion->tipo_involucrado ?: 'JUGADOR');
+        if (!in_array($tipoInvolucrado, ['JUGADOR', 'TURNO', 'DIRIGENTE', 'CLUB'])) {
+            $tipoInvolucrado = 'JUGADOR';
         }
 
-        $jugador ??= new Jugador();
-        $jugador->fill([
-            'rut' => $data['jugador_rut'],
-            'nombre' => $data['jugador_nombre'],
-            'club_id' => $data['club_id'],
-        ])->save();
+        $data = $request->validate([
+            'campeonato_id'       => 'required|exists:campeonatos,id',
+            'fase_id'             => 'required|exists:fases,id',
+            'numero_fecha'        => 'required|integer|min:1',
+            'tipo_involucrado'    => 'nullable|in:JUGADOR,TURNO,DIRIGENTE,CLUB',
+            'club_id'             => $tipoInvolucrado === 'TURNO' ? 'nullable|exists:clubes,id' : 'required|exists:clubes,id',
+            'jugador_rut'         => ['nullable', 'string', 'max:20'],
+            'jugador_nombre'      => $tipoInvolucrado === 'CLUB' ? 'nullable|string|max:255' : 'required|string|max:255',
+            'articulo_reglamento' => 'required|string|max:255',
+            'tipo_falta'          => 'required|string|max:255',
+            'observacion'         => 'nullable|string',
+            'cantidad_sancion'    => 'required|integer|min:1',
+            'tipo_sancion'        => 'required|in:PARTIDOS,TIEMPO,AMONESTACION',
+            'unidad_tiempo'       => ['required', 'in:PARTIDOS,MESES,AÑOS,AMONESTACION', $this->unidadTiempoCoincideConTipo($request)],
+            'fecha_resolucion'    => 'required|date',
+            'estado'              => 'required|in:ACTIVO,CUMPLIDO',
+        ]);
 
-        $data['jugador_id'] = $jugador->id;
+        $data['tipo_involucrado'] = $tipoInvolucrado;
+        $data['club_id'] = !empty($data['club_id']) ? $data['club_id'] : null;
+
+        if ($tipoInvolucrado === 'JUGADOR') {
+            $rutInput = trim((string) ($data['jugador_rut'] ?? ''));
+            $data['jugador_rut'] = $rutInput !== '' ? RutHelper::normalizar($rutInput) : null;
+
+            $jugadorActual = $sancion->jugador;
+            $jugador = null;
+
+            if ($data['jugador_rut']) {
+                $jugador = Jugador::where('rut', $data['jugador_rut'])->first();
+                if (!$jugador && $jugadorActual && (empty($jugadorActual->rut) || RutHelper::esPendiente($jugadorActual->rut)) && !RutHelper::esPendiente($data['jugador_rut'])) {
+                    $jugador = $jugadorActual;
+                }
+            } else {
+                $jugador = $jugadorActual ?: Jugador::where('nombre', $data['jugador_nombre'])
+                    ->where('club_id', $data['club_id'])
+                    ->first();
+            }
+
+            $jugador ??= new Jugador();
+            $jugador->fill([
+                'rut'     => $data['jugador_rut'],
+                'nombre'  => $data['jugador_nombre'],
+                'club_id' => $data['club_id'],
+            ])->save();
+
+            $data['jugador_id'] = $jugador->id;
+            $data['nombre_involucrado'] = $jugador->nombre;
+            $data['rut_involucrado'] = $jugador->rut;
+        } elseif ($tipoInvolucrado === 'CLUB') {
+            $clubObj = Club::find($data['club_id']);
+            $data['jugador_id'] = null;
+            $data['nombre_involucrado'] = $clubObj?->name ?? 'Club';
+            $data['rut_involucrado'] = null;
+        } else {
+            // TURNO o DIRIGENTE
+            $rutNorm = !empty($data['jugador_rut']) ? RutHelper::normalizar($data['jugador_rut']) : null;
+            $data['jugador_id'] = null;
+            $data['nombre_involucrado'] = $data['jugador_nombre'];
+            $data['rut_involucrado'] = $rutNorm;
+        }
 
         if ($data['tipo_sancion'] === 'TIEMPO') {
             $data['fecha_termino_cronologica'] = app(\App\Services\SancionService::class)->calcularFechaTermino(
@@ -165,28 +247,38 @@ class SancionController extends Controller
                 $data['unidad_tiempo'],
                 $data['fecha_resolucion']
             );
+        } elseif ($data['tipo_sancion'] === 'AMONESTACION') {
+            $data['cantidad_sancion'] = 1;
+            $data['unidad_tiempo'] = 'AMONESTACION';
+            $data['fecha_termino_cronologica'] = null;
         } else {
             $data['fecha_termino_cronologica'] = null;
         }
 
         $sancion->update($data);
 
-        $clubName = Club::find($data['club_id'])?->name ?? 'Club';
-        \App\Support\Auditor::log('EDITAR', 'TRIBUNAL', "Modificó sanción ID #{$sancion->id} de {$data['jugador_nombre']} ({$clubName}) a {$data['cantidad_sancion']} {$data['unidad_tiempo']} [Estado: {$data['estado']}].");
+        $clubName = $data['club_id'] ? (Club::find($data['club_id'])?->name ?? 'Club') : 'Sin Club';
+        $sujetoLabel = $data['nombre_involucrado'] ?? ($data['jugador_nombre'] ?? $clubName);
+        $detalleSancionLog = $data['tipo_sancion'] === 'AMONESTACION' ? 'Amonestación Escrita' : "{$data['cantidad_sancion']} {$data['unidad_tiempo']}";
+        \App\Support\Auditor::log('EDITAR', 'TRIBUNAL', "Modificó sanción ID #{$sancion->id} [{$tipoInvolucrado}] de {$sujetoLabel} ({$clubName}) a {$detalleSancionLog} [Estado: {$data['estado']}].");
 
         return redirect()->back()->with('success', 'Sanción actualizada correctamente.');
     }
 
     /**
      * unidad_tiempo debe ser coherente con tipo_sancion: PARTIDOS exige unidad_tiempo=PARTIDOS,
-     * TIEMPO exige unidad_tiempo en MESES o AÑOS (evita fecha_termino_cronologica nula en sanciones TIEMPO).
+     * TIEMPO exige unidad_tiempo en MESES o AÑOS, y AMONESTACION exige unidad_tiempo=AMONESTACION.
      */
     private function unidadTiempoCoincideConTipo(Request $request): \Closure
     {
         return function (string $attribute, mixed $value, \Closure $fail) use ($request) {
             $tipo = $request->input('tipo_sancion');
 
-            if ($tipo === 'TIEMPO' && $value === 'PARTIDOS') {
+            if ($tipo === 'AMONESTACION' && $value !== 'AMONESTACION') {
+                $fail('Cuando el tipo de sanción es AMONESTACION, la unidad debe ser AMONESTACION.');
+            }
+
+            if ($tipo === 'TIEMPO' && !in_array($value, ['MESES', 'AÑOS'])) {
                 $fail('Cuando el tipo de sanción es TIEMPO, la unidad de tiempo debe ser MESES o AÑOS.');
             }
 
@@ -219,7 +311,10 @@ class SancionController extends Controller
             $secretario = \App\Models\User::role('Secretario')->first();
             $presidente = \App\Models\User::role('Presidente')->first();
 
-            if ($sancion->estado === 'CUMPLIDO') {
+            if ($sancion->tipo_sancion === 'AMONESTACION') {
+                // Carta de Amonestación (siempre usa folio DISC)
+                $oficio = $this->sancionService->generarOficioSancion($id);
+            } elseif ($sancion->estado === 'CUMPLIDO') {
                 // Oficio de Habilitación (solo para sanciones cumplidas)
                 $oficio = $this->sancionService->generarOficioHabilitacion($id);
             } else {

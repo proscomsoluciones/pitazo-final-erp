@@ -399,7 +399,7 @@
                     <div class="oficio-num">{{ str_replace('CED-', '', $oficio->numero_secuencial ?: $oficio->folio) }}</div>
                 </div>
                 <div style="font-size: 8pt; font-weight: bold; color: #334155; margin-top: 4px;">
-                    REF: {{ $sancion->estado === 'ACTIVO' ? 'Notificación de Sanción' : 'Comunica Resolución' }}
+                    REF: {{ $sancion->tipo_sancion === 'AMONESTACION' ? 'Carta de Amonestación' : ($sancion->estado === 'ACTIVO' ? 'Notificación de Sanción' : 'Comunica Resolución') }}
                 </div>
             </td>
         </tr>
@@ -409,6 +409,20 @@
     </tr></table>
 
     {{-- DE / A --}}
+    @php
+        $invTipo = $sancion->tipo_involucrado ?: ($sancion->jugador ? 'JUGADOR' : ($sancion->nombre_involucrado ? 'TURNO' : 'CLUB'));
+        $invNombre = $sancion->jugador->nombre ?? $sancion->nombre_involucrado;
+        $invRutRaw = $sancion->jugador->rut ?? $sancion->rut_involucrado;
+        $invRut = ($invRutRaw && !\App\Helpers\RutHelper::esPendiente($invRutRaw))
+            ? \App\Helpers\RutHelper::format($invRutRaw)
+            : null;
+        $invCargoLabel = match ($invTipo) {
+            'TURNO'     => 'director de turno',
+            'DIRIGENTE' => 'dirigente',
+            'CLUB'      => 'club',
+            default     => 'jugador',
+        };
+    @endphp
     <table class="de-a-table">
         <tr>
             <td class="de-a-label">DE:</td>
@@ -417,7 +431,7 @@
         <tr>
             <td class="de-a-label">A:</td>
             <td class="de-a-value">
-                {{ $sancion->club->name ?? '' }}
+                {{ $sancion->club->name ?? ($invNombre ?: 'A quien corresponda') }}
             </td>
         </tr>
     </table>
@@ -425,18 +439,70 @@
     {{-- CUERPO --}}
     <p class="saludo">Estimados señores:</p>
 
-    @if($sancion->estado === 'ACTIVO')
+    @if($sancion->tipo_sancion === 'AMONESTACION')
+        {{-- CARTA DE AMONESTACIÓN --}}
+        <p class="body-text">
+            Junto con saludar, por medio del presente documento se notifica que, en sesión celebrada con fecha
+            <strong>{{ \Carbon\Carbon::parse($sancion->fecha_resolucion)->translatedFormat('j \d\e F \d\e Y') }}</strong>,
+            se ha resuelto cursar formalmente <strong>CARTA DE AMONESTACIÓN ESCRITA</strong> al
+            @if($invTipo === 'CLUB' || (!$invNombre && $sancion->club))
+                club <strong>{{ $sancion->club->name ?? 'Club' }}</strong>,
+            @else
+                {{ $invCargoLabel }} <strong>{{ $invNombre }}</strong>@if($invRut),
+                con RUT <strong>{{ $invRut }}</strong>@endif @if($sancion->club),
+                perteneciente al <strong>{{ $sancion->club->name }}</strong>@endif,
+            @endif
+            conforme a lo establecido en el
+            <strong>{{ $sancion->articulo_reglamento }}</strong>
+            del Reglamento ANFA vigente:
+        </p>
+
+        <div class="sancion-box" style="background-color: #fffbeb; border-left-color: #d97706; border-top-color: #fde68a; border-right-color: #fde68a; border-bottom-color: #fde68a;">
+            <div class="sancion-title" style="color: #b45309;">RESOLUCIÓN &mdash; CARTA DE AMONESTACIÓN ESCRITA</div>
+            <table class="sancion-detail-table">
+                <tr>
+                    <td class="sancion-lbl">Motivo / Falta:</td>
+                    <td class="sancion-val">{{ $sancion->tipo_infraccion ?? 'Infracción reglamentaria' }}</td>
+                </tr>
+                <tr>
+                    <td class="sancion-lbl">Medida aplicada:</td>
+                    <td class="sancion-val">
+                        <strong>Amonestación Escrita (Sin suspensión de partidos)</strong>
+                    </td>
+                </tr>
+                @if($sancion->campeonato)
+                    <tr>
+                        <td class="sancion-lbl">Campeonato:</td>
+                        <td class="sancion-val">
+                            {{ $sancion->campeonato->nombre }}@if($sancion->fase) &mdash; {{ $sancion->fase->nombre }}@endif @if($sancion->numero_fecha), Fecha {{ $sancion->numero_fecha }}@endif
+                        </td>
+                    </tr>
+                @endif
+                @if($sancion->observacion)
+                    <tr>
+                        <td class="sancion-lbl">Observaciones:</td>
+                        <td class="sancion-val">{{ $sancion->observacion }}</td>
+                    </tr>
+                @endif
+            </table>
+        </div>
+
+        <p class="body-text">
+            Se deja constancia de esta amonestación en el registro disciplinario oficial de la Asociación, exhortando a mantener una conducta ajustada a las normas deportivas y reglamentarias, advirtiéndose que la reiteración de estas faltas dará lugar a sanciones mayores conforme al reglamento vigente.
+        </p>
+
+    @elseif($sancion->estado === 'ACTIVO')
         {{-- OFICIO DE SANCIÓN --}}
         <p class="body-text">
             Junto con saludar, el Comité de Disciplina informa que, en reunión celebrada con fecha
             <strong>{{ \Carbon\Carbon::parse($sancion->fecha_resolucion)->translatedFormat('j \d\e F \d\e Y') }}</strong>,
             se ha resuelto sancionar al
-            @if($sancion->jugador)
-                jugador <strong>{{ $sancion->jugador->nombre }}</strong>,
-                con RUT <strong>{{ \App\Helpers\RutHelper::format($sancion->jugador->rut) }}</strong>,
-                perteneciente al  <strong>{{ $sancion->club->name }}</strong>,
+            @if($invTipo === 'CLUB' || (!$invNombre && $sancion->club))
+                club <strong>{{ $sancion->club->name ?? 'Club' }}</strong>,
             @else
-                club <strong>{{ $sancion->club->name }}</strong>,
+                {{ $invCargoLabel }} <strong>{{ $invNombre }}</strong>@if($invRut),
+                con RUT <strong>{{ $invRut }}</strong>@endif @if($sancion->club),
+                perteneciente al <strong>{{ $sancion->club->name }}</strong>@endif,
             @endif
             conforme a lo establecido en el
             <strong>{{ $sancion->articulo_reglamento }}</strong>
@@ -482,20 +548,20 @@
         </div>
 
         <p class="body-text">
-            Por tanto, el jugador o dirigente queda <strong>SUSPENDIDO</strong> y no podrá participar en competiciones oficiales durante el período indicado.
+            Por tanto, el {{ $invCargoLabel }} queda <strong>SUSPENDIDO</strong> y no podrá participar ni ejercer funciones en competiciones oficiales durante el período indicado.
         </p>
 
     @else
         {{-- OFICIO DE HABILITACIÓN --}}
         <p class="body-text">
             Por medio de la presente, se notifica formalmente al
-            <strong>{{ $sancion->club ? $sancion->club->name : 'club' }}</strong>
+            <strong>{{ $sancion->club ? $sancion->club->name : ($invNombre ?: 'interesado') }}</strong>
             la resolución respecto a la sanción aplicada al
-            @if($sancion->jugador)
-                jugador <strong>{{ $sancion->jugador->nombre }}</strong>,
-                RUT: <strong>{{ \App\Helpers\RutHelper::format($sancion->jugador->rut) }}</strong>,
-            @else
+            @if($invTipo === 'CLUB' || (!$invNombre && $sancion->club))
                 club <strong>{{ $sancion->club ? $sancion->club->name : '' }}</strong>,
+            @else
+                {{ $invCargoLabel }} <strong>{{ $invNombre }}</strong>@if($invRut),
+                RUT: <strong>{{ $invRut }}</strong>@endif,
             @endif
             conforme a lo establecido en el
             <strong>{{ $sancion->articulo_reglamento }}</strong>
@@ -509,7 +575,7 @@
         </p>
 
         <div class="hab-box">
-            Por lo tanto, el jugador queda HABILITADO para participar en el campeonato oficial.
+            Por lo tanto, el {{ $invCargoLabel }} queda HABILITADO para participar en el campeonato oficial.
         </div>
     @endif
 

@@ -356,7 +356,11 @@
             ->first(fn ($r) => !empty($r) && !\App\Helpers\RutHelper::esPendiente($r));
         $invRut = $invRut ? \App\Helpers\RutHelper::format($invRut) : 'No registrado';
         $invClub = $caso->club->name ?? ($caso->jugador->club->name ?? null);
-        $invCargo = ['JUGADOR' => 'jugador', 'DIRIGENTE' => 'dirigente'][$invTipo] ?? null;
+        $invCargo = [
+            'JUGADOR'   => 'jugador',
+            'DIRIGENTE' => 'dirigente',
+            'TURNO'     => 'director de turno',
+        ][$invTipo] ?? null;
     @endphp
 
     @if($logoBase64)
@@ -387,7 +391,7 @@
                     <div class="oficio-num">{{ str_replace(['ET-', 'CET-', 'CED-'], '', $caso->folio) }}</div>
                 </div>
                 <div style="font-size: 8pt; font-weight: bold; color: #334155; margin-top: 4px;">
-                    REF: {{ $caso->asunto ?: 'Comunica Resolución' }}
+                    REF: {{ $tipoOficio === 'AMONESTACION' ? ('Carta de Amonestación — ' . ($caso->asunto ?: 'Amonestación Escrita')) : ($caso->asunto ?: 'Comunica Resolución') }}
                 </div>
             </td>
         </tr>
@@ -495,6 +499,36 @@
                 campeonatos oficiales.</p>
         </div>
 
+    @elseif($tipoOficio === 'AMONESTACION')
+        <p class="body-text">
+            Por medio del presente documento, se extiende formalmente <strong>CARTA DE AMONESTACIÓN ESCRITA</strong>
+            @if($invCargo && $invNombre)
+                al {{ $invCargo }} <strong>{{ $invNombre }}</strong>@if($invRut && $invRut !== 'No registrado'), RUT <strong>{{ $invRut }}</strong>@endif @if($invClub), perteneciente al <strong>{{ $invClub }}</strong>@endif,
+            @elseif($invClub)
+                al club <strong>{{ $invClub }}</strong>,
+            @endif
+            en virtud de los antecedentes analizados en sesión oficial.
+        </p>
+
+        <div class="highlight-box" style="border-left-color: #d97706; background-color: #fffbeb;">
+            <div class="box-title" style="color: #b45309;">Detalle de la Amonestación Escrita</div>
+            <p style="margin-bottom: 4px;"><strong>Motivo / Falta:</strong> {{ $caso->asunto }}</p>
+            @if($caso->articulo_reglamento)
+                <p style="margin-bottom: 4px;"><strong>Normativa Aplicada:</strong> {{ $caso->articulo_reglamento }} del Reglamento vigente.</p>
+            @endif
+            @if($caso->descripcion)
+                <p style="margin-bottom: 4px;"><strong>Antecedentes:</strong> {{ $caso->descripcion }}</p>
+            @endif
+            @if($caso->detalles_resolucion)
+                <p style="margin-bottom: 4px;"><strong>Observación / Dictamen:</strong> {{ $caso->detalles_resolucion }}</p>
+            @endif
+            <p style="margin-top: 6px;"><strong>Medida Aplicada:</strong> Amonestación formal por escrito registrada en hoja de vida deportiva.</p>
+        </div>
+
+        <p class="body-text">
+            Se deja expresa constancia de que la presente amonestación queda registrada en los antecedentes oficiales de la Asociación, exhortando a mantener una conducta acorde a los principios éticos, deportivos y reglamentarios que rigen nuestra institución, advirtiéndose que la reiteración de estas conductas dará lugar a sanciones mayores conforme al reglamento vigente.
+        </p>
+
     @else {{-- RESOLUCION --}}
         <p class="body-text">
             Por medio de la presente, se notifica formalmente al
@@ -503,7 +537,7 @@
             <strong>{{ $caso->asunto ?: 'la materia investigada' }}</strong>@if($caso->jugador) al jugador
                 <strong>{{ $caso->jugador->nombre }}</strong>, RUT:
             <strong>{{ \App\Helpers\RutHelper::format($caso->jugador->rut) }}</strong>@elseif($caso->nombre_involucrado && $caso->nombre_involucrado !== ($caso->club->name ?? ''))
-                al {{ $caso->cargo_involucrado ?: 'dirigente' }}, el Señor
+                al {{ $invCargo ?: ($caso->cargo_involucrado ?: 'dirigente') }},
                 <strong>{{ $caso->nombre_involucrado }}</strong>@if($caso->rut_involucrado), RUT:
             <strong>{{ \App\Helpers\RutHelper::format($caso->rut_involucrado) }}</strong>@endif @endif.
         </p>
@@ -532,7 +566,7 @@
     @endif
 
     <p class="closing">
-        @if(($tipoOficio ?? '') === 'RESOLUCION')
+        @if(in_array($tipoOficio ?? '', ['RESOLUCION', 'AMONESTACION']))
             Sin otro particular, se comunica la presente resolución para su conocimiento y debido cumplimiento.
         @else
             Sin otro particular, se comunica el presente oficio para su conocimiento y fines pertinentes.
@@ -541,8 +575,8 @@
 
     <p class="atentamente">Atentamente,</p>
 
-    @if(($tipoOficio ?? '') === 'RESOLUCION')
-        {{-- RESOLUCIONES: Firma el Presidente y el Secretario de la Asociación --}}
+    @if(in_array($tipoOficio ?? '', ['RESOLUCION', 'AMONESTACION']))
+        {{-- RESOLUCIONES Y CARTAS DE AMONESTACIÓN: Firma el Presidente y el Secretario de la Asociación --}}
         <p class="comite-firma">
             Asociación de Fútbol de {{ $asoc->ciudad ?? 'Catemu' }}
         </p>

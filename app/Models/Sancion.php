@@ -16,6 +16,9 @@ class Sancion extends Model
         'numero_fecha',
         'jugador_id',
         'club_id',
+        'tipo_involucrado',
+        'nombre_involucrado',
+        'rut_involucrado',
         'articulo_reglamento',
         'tipo_falta',
         'tipo_sancion',
@@ -75,6 +78,10 @@ class Sancion extends Model
      */
     public function getUnidadTiempoTextoAttribute(): string
     {
+        if ($this->tipo_sancion === 'AMONESTACION' || $this->unidad_tiempo === 'AMONESTACION') {
+            return 'Amonestación Escrita';
+        }
+
         $singular = ['PARTIDOS' => 'Partido', 'MESES' => 'Mes', 'AÑOS' => 'Año'];
         $plural   = ['PARTIDOS' => 'Partidos', 'MESES' => 'Meses', 'AÑOS' => 'Años'];
 
@@ -88,6 +95,10 @@ class Sancion extends Model
      */
     public function getSancionTextoAttribute(): string
     {
+        if ($this->tipo_sancion === 'AMONESTACION' || $this->unidad_tiempo === 'AMONESTACION') {
+            return 'Amonestación Escrita';
+        }
+
         $unidad = $this->unidad_tiempo_texto;
         $esReincidente = $this->observacion && str_contains($this->observacion, 'Reincidencia');
 

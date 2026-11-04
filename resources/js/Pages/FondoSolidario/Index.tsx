@@ -33,7 +33,7 @@ interface Fondo {
     club_id: number;
     club?: Club;
     numero_fondo: number | null;
-    jugador_rut: string;
+    jugador_rut: string | null;
     jugador_nombre: string;
     diagnostico: string | null;
     tipo_beneficio: string | null;
@@ -141,7 +141,7 @@ export default function Index({ fondos, campeonatos, clubes }: { fondos: Fondo[]
                 fase_id: fondo.fase_id,
                 numero_fecha: fondo.numero_fecha,
                 club_id: fondo.club_id,
-                jugador_rut: fondo.jugador_rut,
+                jugador_rut: fondo.jugador_rut || '',
                 jugador_nombre: fondo.jugador_nombre,
                 diagnostico: fondo.diagnostico || '',
                 tipo_beneficio: fondo.tipo_beneficio || '',
@@ -205,11 +205,11 @@ export default function Index({ fondos, campeonatos, clubes }: { fondos: Fondo[]
             const term = searchTerm.toLowerCase();
             const matchesSearch =
                 f.jugador_nombre.toLowerCase().includes(term) ||
-                f.jugador_rut.toLowerCase().includes(term) ||
+                (f.jugador_rut || '').toLowerCase().includes(term) ||
                 (f.club?.name || '').toLowerCase().includes(term);
-            const matchesCampeonato = filterCampeonato ? f.campeonato_id.toString() === filterCampeonato : true;
-            const matchesFase = filterFase ? f.fase_id.toString() === filterFase : true;
-            const matchesFecha = filterFecha ? f.numero_fecha.toString() === filterFecha : true;
+            const matchesCampeonato = filterCampeonato ? f.campeonato_id?.toString() === filterCampeonato : true;
+            const matchesFase = filterFase ? f.fase_id?.toString() === filterFase : true;
+            const matchesFecha = filterFecha ? f.numero_fecha?.toString() === filterFecha : true;
             return matchesSearch && matchesCampeonato && matchesFase && matchesFecha;
         });
     }, [fondos, searchTerm, filterCampeonato, filterFase, filterFecha]);
@@ -592,14 +592,13 @@ export default function Index({ fondos, campeonatos, clubes }: { fondos: Fondo[]
                                 {errors.club_id && <span className="text-rose-600 text-xs mt-1 font-bold block">{errors.club_id}</span>}
                             </div>
                             <div>
-                                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">RUT Jugador *</label>
+                                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">RUT Jugador</label>
                                 <input
                                     type="text"
                                     value={data.jugador_rut}
                                     onChange={e => setData('jugador_rut', e.target.value)}
                                     className="w-full rounded-xl border-slate-300 bg-white text-sm font-medium focus:ring-2 focus:ring-blue-500"
                                     placeholder="12.345.678-9"
-                                    required
                                 />
                                 {errors.jugador_rut && <span className="text-rose-600 text-xs mt-1 font-bold block">{errors.jugador_rut}</span>}
                             </div>

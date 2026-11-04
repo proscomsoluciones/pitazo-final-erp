@@ -458,14 +458,28 @@
             @forelse($sanciones as $sancion)
                 @php
                     $esReincidente = $sancion->observacion && str_contains($sancion->observacion, 'Reincidencia');
+                    $invTipo = $sancion->tipo_involucrado ?: ($sancion->jugador ? 'JUGADOR' : ($sancion->nombre_involucrado ? 'TURNO' : 'CLUB'));
+                    $invNombre = $sancion->jugador?->nombre ?? $sancion->nombre_involucrado;
                 @endphp
                 <tr>
-                    <td><strong>{{ $sancion->club->name }}</strong></td>
-                    <td>{{ $sancion->jugador ? $sancion->jugador->nombre : 'Sanción Aplicada al Club' }}</td>
+                    <td><strong>{{ $sancion->club?->name ?? ($invTipo === 'TURNO' ? 'Turno de Cancha' : 'General') }}</strong></td>
+                    <td>
+                        @if($invTipo === 'TURNO')
+                            {{ $invNombre ?: 'Director de Turno' }} <strong>(Turno)</strong>
+                        @elseif($invTipo === 'DIRIGENTE')
+                            {{ $invNombre ?: 'Dirigente' }} <strong>(Dirigente)</strong>
+                        @elseif($invTipo === 'CLUB' || !$invNombre)
+                            Sanción Aplicada al Club
+                        @else
+                            {{ $invNombre }}
+                        @endif
+                    </td>
                     <td><strong>{{ $sancion->articulo_reglamento }}</strong></td>
                     <td style="text-align: center;">
                         <span class="badge-sancion">
-                            @if($esReincidente && $sancion->cantidad_sancion > 1)
+                            @if($sancion->tipo_sancion === 'AMONESTACION' || $sancion->unidad_tiempo === 'AMONESTACION')
+                                Amonestación Escrita
+                            @elseif($esReincidente && $sancion->cantidad_sancion > 1)
                                 {{ $sancion->cantidad_sancion - 1 }}+1 {{ $sancion->unidad_tiempo_texto }} (R)
                             @else
                                 {{ $sancion->cantidad_sancion }} {{ $sancion->unidad_tiempo_texto }}

@@ -17,8 +17,9 @@ interface Club {
 
 interface Jugador {
     id: number;
-    rut: string;
+    rut: string | null;
     nombre: string;
+    club_id?: number | null;
 }
 
 interface Fase {
@@ -39,7 +40,10 @@ interface Sancion {
     fase?: Fase;
     numero_fecha?: number;
     jugador?: Jugador;
-    club: Club;
+    club?: Club | null;
+    tipo_involucrado?: 'JUGADOR' | 'TURNO' | 'DIRIGENTE' | 'CLUB';
+    nombre_involucrado?: string | null;
+    rut_involucrado?: string | null;
     articulo_reglamento: string;
     tipo_falta: string;
     tipo_sancion: string;
@@ -83,6 +87,9 @@ export default function TribunalDashboard({
 }) {
     const [nuevaReferencia, setNuevaReferencia] = useState('');
     const [isCreandoReferencia, setIsCreandoReferencia] = useState(false);
+    const [jugadorSearch, setJugadorSearch] = useState('');
+    const [isManualJugador, setIsManualJugador] = useState(false);
+    const [esFaltaPersonalizada, setEsFaltaPersonalizada] = useState(false);
 
     const handleGuardarNuevaReferencia = () => {
         if (!nuevaReferencia.trim()) return;
@@ -92,6 +99,7 @@ export default function TribunalDashboard({
         }, {
             onSuccess: () => {
                 setData('tipo_falta', nuevaReferencia.trim());
+                setEsFaltaPersonalizada(false);
                 setNuevaReferencia('');
                 setIsCreandoReferencia(false);
             }
@@ -130,14 +138,15 @@ export default function TribunalDashboard({
         campeonato_id: '',
         fase_id: '',
         numero_fecha: '',
+        tipo_involucrado: 'JUGADOR' as 'JUGADOR' | 'TURNO' | 'DIRIGENTE' | 'CLUB',
         club_id: '',
         jugador_rut: '',
         jugador_nombre: '',
         articulo_reglamento: '',
         tipo_falta: '',
-        tipo_sancion: 'PARTIDOS' as 'PARTIDOS' | 'TIEMPO',
+        tipo_sancion: 'PARTIDOS' as 'PARTIDOS' | 'TIEMPO' | 'AMONESTACION',
         cantidad_sancion: 1,
-        unidad_tiempo: 'PARTIDOS' as 'PARTIDOS' | 'MESES' | 'AÑOS',
+        unidad_tiempo: 'PARTIDOS' as 'PARTIDOS' | 'MESES' | 'AÑOS' | 'AMONESTACION',
         fecha_resolucion: new Date().toISOString().split('T')[0],
         estado: 'ACTIVO',
         observacion: ''
@@ -149,7 +158,7 @@ export default function TribunalDashboard({
     // Contexto (campeonato/fase/fecha) seleccionado en la página antes de abrir una edición, para restaurarlo al cerrar
     const [contextoPrevio, setContextoPrevio] = useState<{ campeonato_id: string; fase_id: string; numero_fecha: string } | null>(null);
 
-    // Detección de Reincidencia: calcular sanciones previas del jugador (+1 partido por antecedente)
+    // Detección de Reincidencia: calcular sanciones previas del jugador (+1 partido por antecedente, excluyendo amonestaciones)
     const antecedenteSanciones = useMemo(() => {
         const cleanRut = data.jugador_rut ? data.jugador_rut.replace(/[^kK0-9]/g, '').toLowerCase() : '';
         const cleanName = data.jugador_nombre ? data.jugador_nombre.trim().toLowerCase() : '';
@@ -158,6 +167,7 @@ export default function TribunalDashboard({
 
         return sanciones.filter(s => {
             if (editingSancionId && s.id === editingSancionId) return false;
+            if (s.tipo_sancion === 'AMONESTACION') return false;
             const sRut = s.jugador?.rut ? s.jugador.rut.replace(/[^kK0-9]/g, '').toLowerCase() : '';
             const sName = s.jugador?.nombre ? s.jugador.nombre.trim().toLowerCase() : '';
 
@@ -187,10 +197,11 @@ export default function TribunalDashboard({
     }, [selectedFase]);
 
     const reincidenciaAplica = useMemo(() => {
+        if (data.tipo_sancion === 'AMONESTACION') return false;
         if (reincidenciaCount <= 0) return false;
         if (esLiguilla && data.unidad_tiempo === 'PARTIDOS') return false;
         return true;
-    }, [reincidenciaCount, esLiguilla, data.unidad_tiempo]);
+    }, [reincidenciaCount, esLiguilla, data.unidad_tiempo, data.tipo_sancion]);
 
     // Cálculo automático de Total: Base + Reincidencia (+1 partido por expulsión previa)
     useEffect(() => {
@@ -259,12 +270,29 @@ export default function TribunalDashboard({
         setIsFormOpen(false);
     };
 
+    const jugadoresFiltradosBusqueda = useMemo(() => {
+        let list = data.club_id
+            ? jugadores.filter(j => j.club_id?.toString() === data.club_id.toString())
+            : jugadores;
+        if (jugadorSearch.trim()) {
+            const q = jugadorSearch.toLowerCase().trim();
+            list = list.filter(j =>
+                (j.nombre || '').toLowerCase().includes(q) ||
+                (j.rut || '').toLowerCase().includes(q)
+            );
+        }
+        return list.slice(0, 15);
+    }, [jugadores, data.club_id, jugadorSearch]);
+
     const resetForm = () => {
-        reset('club_id', 'jugador_rut', 'jugador_nombre', 'articulo_reglamento', 'tipo_falta', 'observacion', 'cantidad_sancion', 'tipo_sancion', 'unidad_tiempo', 'fecha_resolucion', 'estado');
+        reset('tipo_involucrado', 'club_id', 'jugador_rut', 'jugador_nombre', 'articulo_reglamento', 'tipo_falta', 'observacion', 'cantidad_sancion', 'tipo_sancion', 'unidad_tiempo', 'fecha_resolucion', 'estado');
         if (contextoPrevio) {
             setData(prev => ({ ...prev, ...contextoPrevio }));
             setContextoPrevio(null);
         }
+        setJugadorSearch('');
+        setIsManualJugador(false);
+        setEsFaltaPersonalizada(false);
         setBasePartidos(1);
         clearErrors();
         setEditingSancionId(null);
@@ -281,14 +309,19 @@ export default function TribunalDashboard({
             setContextoPrevio({ campeonato_id: data.campeonato_id, fase_id: data.fase_id, numero_fecha: data.numero_fecha });
         }
         clearErrors();
+        const tipoInv = sancion.tipo_involucrado || (sancion.jugador ? 'JUGADOR' : (sancion.nombre_involucrado ? 'TURNO' : 'CLUB'));
+        setJugadorSearch('');
+        setIsManualJugador(tipoInv === 'JUGADOR' && !sancion.jugador);
+        setEsFaltaPersonalizada(Boolean(sancion.tipo_falta && !referencias.some(r => r.nombre === sancion.tipo_falta)));
         setData({
             ...data,
             campeonato_id: sancion.campeonato_id?.toString() || '',
             fase_id: sancion.fase_id?.toString() || '',
             numero_fecha: sancion.numero_fecha?.toString() || '',
-            club_id: sancion.club_id.toString(),
-            jugador_rut: sancion.jugador?.rut || '',
-            jugador_nombre: sancion.jugador?.nombre || '',
+            tipo_involucrado: tipoInv,
+            club_id: sancion.club_id?.toString() || '',
+            jugador_rut: sancion.jugador?.rut || sancion.rut_involucrado || '',
+            jugador_nombre: sancion.jugador?.nombre || sancion.nombre_involucrado || '',
             articulo_reglamento: sancion.articulo_reglamento,
             tipo_falta: sancion.tipo_falta,
             observacion: sancion.observacion || '',
@@ -348,9 +381,9 @@ export default function TribunalDashboard({
 
     const handleEditNota = (nota: Nota) => {
         formNota.setData({
-            campeonato_id: nota.campeonato_id.toString(),
-            fase_id: nota.fase_id.toString(),
-            numero_fecha: nota.numero_fecha.toString(),
+            campeonato_id: nota.campeonato_id?.toString() || '',
+            fase_id: nota.fase_id?.toString() || '',
+            numero_fecha: nota.numero_fecha?.toString() || '',
             club_id: nota.club_id ? nota.club_id.toString() : '',
             nota: nota.nota,
             monto: nota.monto ? nota.monto.toString() : '',
@@ -404,12 +437,18 @@ export default function TribunalDashboard({
     const filteredSanciones = sanciones.filter(sancion => {
         const matchesSearch =
             (sancion.jugador?.nombre || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+            (sancion.nombre_involucrado || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
             (sancion.jugador?.rut || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-            (sancion.club.name).toLowerCase().includes(searchTerm.toLowerCase());
+            (sancion.rut_involucrado || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+            (sancion.club?.name || '').toLowerCase().includes(searchTerm.toLowerCase());
 
         const matchesCampeonato = filterCampeonato ? sancion.campeonato?.id.toString() === filterCampeonato : true;
         const matchesFase = filterFase ? sancion.fase?.id.toString() === filterFase : true;
-        const matchesEstado = filterEstado ? sancion.estado === filterEstado : true;
+        const matchesEstado = filterEstado
+            ? (filterEstado === 'AMONESTACION'
+                ? (sancion.unidad_tiempo === 'AMONESTACION' || sancion.tipo_sancion === 'AMONESTACION')
+                : sancion.estado === filterEstado)
+            : true;
         const matchesFecha = filterFecha ? sancion.numero_fecha?.toString() === filterFecha : true;
 
         return matchesSearch && matchesCampeonato && matchesFase && matchesEstado && matchesFecha;
@@ -448,21 +487,40 @@ export default function TribunalDashboard({
                 <div className="mx-auto max-w-7xl sm:px-6 lg:px-8 space-y-8">
                     
                     <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 md:p-8 mb-6">
-                        <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
+                        <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-8 gap-4">
                             <div>
                                 <h2 className="text-2xl font-bold text-slate-800">Comité de Disciplina</h2>
-                                <p className="text-sm text-slate-500 mt-1 font-medium">Gestión de sanciones y penalizaciones</p>
+                                <p className="text-sm text-slate-500 mt-1 font-medium">Gestión de sanciones, suspensiones y cartas de amonestación</p>
                             </div>
-                            {isContextSelected && canManageSanciones && (
-                                <div className="flex gap-2 w-full sm:w-auto">
+                            {canManageSanciones && (
+                                <div className="flex flex-col sm:flex-row gap-2.5 w-full lg:w-auto">
                                     <button 
+                                        type="button"
+                                        onClick={() => {
+                                            resetForm();
+                                            setData(prev => ({
+                                                ...prev,
+                                                unidad_tiempo: 'AMONESTACION',
+                                                tipo_sancion: 'AMONESTACION',
+                                                cantidad_sancion: 1,
+                                                estado: 'CUMPLIDO',
+                                            }));
+                                            setIsFormOpen(true);
+                                        }}
+                                        className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-xl font-extrabold text-sm transition-all duration-200 shadow-xs active:scale-[0.98] gap-2 border border-amber-300 cursor-pointer"
+                                    >
+                                        <FileText size={18} className="text-amber-600 shrink-0" />
+                                        <span>Emitir Carta de Amonestación</span>
+                                    </button>
+                                    <button 
+                                        type="button"
                                         onClick={() => {
                                             resetForm();
                                             setIsFormOpen(true);
                                         }}
-                                        className="w-full sm:w-auto inline-flex items-center justify-center px-5 py-2.5 bg-gradient-to-r from-emerald-600 via-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl font-extrabold text-sm transition-all duration-200 shadow-md shadow-emerald-600/25 hover:shadow-lg hover:shadow-emerald-600/35 active:scale-[0.98] gap-2 border border-emerald-400/20"
+                                        className="w-full sm:w-auto inline-flex items-center justify-center px-5 py-2.5 bg-gradient-to-r from-emerald-600 via-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl font-extrabold text-sm transition-all duration-200 shadow-md shadow-emerald-600/25 hover:shadow-lg hover:shadow-emerald-600/35 active:scale-[0.98] gap-2 border border-emerald-400/20 cursor-pointer"
                                     >
-                                        <Plus size={18} className="stroke-[2.5]" />
+                                        <Plus size={18} className="stroke-[2.5] shrink-0" />
                                         <span>Ingresar Sanción</span>
                                     </button>
                                 </div>
@@ -556,258 +614,480 @@ export default function TribunalDashboard({
                     </div>
 
                     {/* Sanction Form Modal */}
-                    <Modal show={isFormOpen} onClose={closeForm} maxWidth="3xl">
-                        <div className="bg-white rounded-2xl overflow-hidden shadow-2xl">
+                    <Modal show={isFormOpen} onClose={closeForm} maxWidth="5xl">
+                        <div className="bg-white rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl max-h-[calc(100dvh-1.5rem)] sm:max-h-[calc(100dvh-3rem)] flex flex-col w-full">
                             {/* Modal Header */}
-                            <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 px-5 py-3 text-white flex items-center justify-between relative overflow-hidden">
-                                <div className="absolute -right-6 -bottom-6 w-24 h-24 bg-emerald-500/10 rounded-full blur-xl pointer-events-none"></div>
-                                <div className="flex items-center space-x-3.5 relative z-10">
-                                    <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-400/30 text-emerald-400 flex items-center justify-center shadow-inner">
-                                        <Gavel size={16} />
+                            <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 px-4 py-3.5 sm:px-6 sm:py-4 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3 relative overflow-hidden shrink-0">
+                                <div className="absolute -right-6 -bottom-6 w-28 h-28 bg-emerald-500/10 rounded-full blur-xl pointer-events-none"></div>
+                                <div className="flex items-center justify-between sm:justify-start gap-3 relative z-10">
+                                    <div className="flex items-center gap-3 min-w-0">
+                                        <div className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shadow-inner shrink-0 ${
+                                            data.unidad_tiempo === 'AMONESTACION'
+                                                ? 'bg-amber-500/20 border border-amber-400/30 text-amber-400'
+                                                : 'bg-emerald-500/20 border border-emerald-400/30 text-emerald-400'
+                                        }`}>
+                                            {data.unidad_tiempo === 'AMONESTACION' ? <FileText size={19} /> : <Gavel size={19} />}
+                                        </div>
+                                        <div className="min-w-0">
+                                            <h4 className="text-base sm:text-lg font-extrabold tracking-tight text-white truncate">
+                                                {editingSancionId
+                                                    ? (data.unidad_tiempo === 'AMONESTACION' ? 'Editar Carta de Amonestación' : 'Editar Sanción Disciplinaria')
+                                                    : (data.unidad_tiempo === 'AMONESTACION' ? 'Emitir Carta de Amonestación — Disciplina' : 'Ingresar Sanción Disciplinaria')}
+                                            </h4>
+                                            <p className="text-[11px] sm:text-xs text-slate-300 font-medium truncate">
+                                                {data.unidad_tiempo === 'AMONESTACION'
+                                                    ? 'Complete los datos para generar e imprimir la Carta de Amonestación PDF'
+                                                    : 'Complete los 3 pasos para registrar el fallo en el acta oficial'}
+                                            </p>
+                                        </div>
                                     </div>
-                                    <div>
-                                        <h4 className="text-base font-extrabold tracking-tight text-white flex items-center gap-2">
-                                            {editingSancionId ? 'Editar Sanción Disciplinaria' : 'Formulario de Ingreso de Sanción'}
-                                        </h4>
-                                        <p className="hidden sm:block text-xs text-slate-300 font-medium">
-                                            {editingSancionId ? 'Modifique los datos de la sanción seleccionada' : 'Ingrese los detalles para registrar en el acta oficial'}
-                                        </p>
-                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={closeForm}
+                                        className="sm:hidden w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white flex items-center justify-center transition-all cursor-pointer shrink-0"
+                                    >
+                                        <X size={18} />
+                                    </button>
                                 </div>
-                                <button
-                                    type="button"
-                                    onClick={closeForm}
-                                    className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white flex items-center justify-center transition-all relative z-10"
-                                >
-                                    <X size={18} />
-                                </button>
+
+                                <div className="flex items-center justify-between sm:justify-end gap-3 relative z-10">
+                                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/10 border border-white/15 text-xs w-full sm:w-auto">
+                                        <Trophy size={14} className="text-emerald-400 shrink-0" />
+                                        <span className="font-bold text-white truncate">
+                                            {campeonatos.find(c => c.id.toString() === data.campeonato_id.toString())?.nombre || 'Seleccione Torneo abajo'}
+                                            {selectedFase ? ` • ${selectedFase.nombre}` : ''}
+                                            {data.numero_fecha ? ` • Fecha ${data.numero_fecha}` : ''}
+                                        </span>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={closeForm}
+                                        className="hidden sm:flex w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white items-center justify-center transition-all cursor-pointer shrink-0"
+                                    >
+                                        <X size={18} />
+                                    </button>
+                                </div>
                             </div>
 
-                            {/* Modal Content: cuerpo con scroll propio y botones siempre visibles */}
-                            <form onSubmit={submit}>
-                            <div className="px-5 py-4 space-y-4 max-h-[calc(100vh-12rem)] overflow-y-auto">
-                                {/* Context Banner */}
-                                <div className="bg-gradient-to-r from-emerald-50/80 via-emerald-50/40 to-slate-50 border border-emerald-200/80 rounded-xl px-3 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                                    <div className="flex items-center space-x-3">
-                                        <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
-                                            <Trophy size={16} />
-                                        </div>
-                                        <div>
-                                            <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider block">Aplicando Sanción en</span>
-                                            <span className="text-xs font-extrabold text-slate-800">
-                                                {campeonatos.find(c => c.id.toString() === data.campeonato_id.toString())?.nombre || 'Sin Campeonato'}
-                                                {selectedFase && (
-                                                    <>
-                                                        <span className="text-emerald-600 font-semibold mx-1.5">•</span>
-                                                        {selectedFase.nombre}
-                                                    </>
-                                                )}
-                                                <span className="text-emerald-600 font-semibold mx-1.5">•</span>
-                                                Fecha {data.numero_fecha || '-'}
-                                            </span>
-                                        </div>
-                                    </div>
-                                    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-600 text-white shadow-xs self-start sm:self-center">
-                                        <CheckCircle2 size={12} className="mr-1" />
-                                        Acta Oficial
-                                    </span>
-                                </div>
-
-                                    {/* Errores de campos que no tienen un input visible en la ventana */}
+                            {/* Modal Content: 3 pasos claros y ordenados con pie fijo */}
+                            <form onSubmit={submit} className="flex flex-col flex-1 min-h-0 overflow-hidden">
+                                <div className="flex-1 p-3.5 sm:p-6 space-y-4 sm:space-y-5 bg-slate-50/70 overflow-y-auto">
+                                    {/* Errores de campos de contexto */}
                                     {(['campeonato_id', 'fase_id', 'numero_fecha', 'estado', 'tipo_sancion', 'unidad_tiempo', 'observacion'] as const).some(k => errors[k]) && (
-                                        <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-semibold space-y-0.5">
+                                        <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-semibold space-y-1">
                                             {(['campeonato_id', 'fase_id', 'numero_fecha', 'estado', 'tipo_sancion', 'unidad_tiempo', 'observacion'] as const).map(k => errors[k] && <p key={k}>• {errors[k]}</p>)}
                                         </div>
                                     )}
 
-                                    {/* Fila 1: Club + Jugador (RUT + Nombre) */}
-                                    <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
-                                    <div className="md:col-span-4">
-                                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                                            Club Afectado <span className="text-red-500">*</span>
-                                        </label>
-                                        <div className="relative">
-                                            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                                                <Shield size={16} />
-                                            </div>
-                                            <select 
-                                                value={data.club_id}
-                                                onChange={e => setData('club_id', e.target.value)}
-                                                className={`pl-10 w-full rounded-xl border ${errors.club_id ? 'border-red-300 bg-red-50/20' : 'border-slate-200 bg-slate-50/50'} focus:bg-white focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-sm font-semibold text-slate-800 transition-all shadow-xs`}
-                                                required
-                                            >
-                                                <option value="">Seleccione un Club...</option>
-                                                {clubes.map(club => (
-                                                    <option key={club.id} value={club.id}>{club.name}</option>
-                                                ))}
-                                            </select>
+                                    {/* Selector de Torneo / Fase / Fecha dentro del modal (por si no lo eligieron antes) */}
+                                    <div className={`p-3.5 sm:p-4 rounded-2xl border shadow-xs ${
+                                        !isContextSelected
+                                            ? 'bg-amber-50/90 border-amber-300'
+                                            : 'bg-white border-slate-200/90'
+                                    }`}>
+                                        <div className="flex items-center gap-2 mb-2.5">
+                                            <Trophy size={15} className={!isContextSelected ? 'text-amber-600' : 'text-emerald-600'} />
+                                            <span className="text-xs font-black uppercase tracking-wider text-slate-800">
+                                                Torneo, Fase y Fecha de Aplicación {!isContextSelected && <span className="text-amber-700 font-bold">(Seleccione para continuar)</span>}
+                                            </span>
                                         </div>
-                                        {errors.club_id && <p className="text-red-500 text-xs font-medium mt-1">{errors.club_id}</p>}
-                                    </div>
-
-                                        <div className="md:col-span-3">
-                                            <div className="flex flex-wrap justify-between items-center gap-1 mb-1.5">
-                                                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                                                    RUT Jugador <span className="text-red-500">*</span>
-                                                </label>
-                                                {jugadores.some(j => j.rut === data.jugador_rut) && (
-                                                    <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                                                        ✓ Existe
-                                                    </span>
-                                                )}
-                                            </div>
-                                            <div className="relative">
-                                                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                                                    <User size={16} />
-                                                </div>
-                                                <input 
-                                                    type="text" 
-                                                    value={data.jugador_rut}
+                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                            <div>
+                                                <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">Campeonato <span className="text-red-500">*</span></label>
+                                                <select
+                                                    value={data.campeonato_id}
                                                     onChange={e => {
-                                                        // RUT provisorio (PENDIENTE-NNNN): se respeta tal cual, sin formatear
-                                                        const upper = e.target.value.toUpperCase().trimStart();
-                                                        if (upper.startsWith('P')) {
-                                                            setData('jugador_rut', upper);
-                                                            const pendiente = jugadores.find(j => j.rut === upper);
-                                                            if (pendiente) {
-                                                                setData(prev => ({...prev, jugador_nombre: pendiente.nombre, jugador_rut: upper}));
-                                                            }
-                                                            return;
-                                                        }
-                                                        let rawRut = e.target.value.replace(/[^kK0-9]/g, '');
-                                                        if (rawRut.length === 0) {
-                                                            setData('jugador_rut', '');
-                                                            return;
-                                                        }
-                                                        let dv = rawRut.slice(-1);
-                                                        let body = rawRut.slice(0, -1);
-                                                        let formattedBody = body.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-                                                        let finalRut = rawRut.length > 1 ? `${formattedBody}-${dv}` : rawRut;
-                                                        finalRut = finalRut.toUpperCase();
-                                                        setData('jugador_rut', finalRut);
-                                                        const existingPlayer = jugadores.find(j => j.rut === finalRut || j.rut === `${body}-${dv}`.toUpperCase());
-                                                        if (existingPlayer) {
-                                                            setData(prev => ({...prev, jugador_nombre: existingPlayer.nombre, jugador_rut: finalRut}));
-                                                        }
+                                                        setData(prev => ({
+                                                            ...prev,
+                                                            campeonato_id: e.target.value,
+                                                            fase_id: '',
+                                                            numero_fecha: '',
+                                                        }));
                                                     }}
-                                                    placeholder="11.111.111-1 o PENDIENTE-0001"
-                                                    className={`pl-10 w-full rounded-xl border ${errors.jugador_rut ? 'border-red-300 bg-red-50/20' : 'border-slate-200 bg-slate-50/50'} focus:bg-white focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-sm font-semibold text-slate-800 transition-all shadow-xs`}
                                                     required
-                                                />
+                                                    className="w-full rounded-xl border border-slate-300 bg-white py-2 px-3 text-xs sm:text-sm font-bold text-slate-800 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+                                                >
+                                                    <option value="">Seleccione Campeonato...</option>
+                                                    {campeonatos.map(c => (
+                                                        <option key={c.id} value={c.id}>{c.nombre}</option>
+                                                    ))}
+                                                </select>
                                             </div>
-                                            {errors.jugador_rut && <p className="text-red-500 text-xs font-medium mt-1">{errors.jugador_rut}</p>}
-                                        </div>
-
-                                        <div className="md:col-span-5">
-                                            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                                                Nombres y Apellidos <span className="text-red-500">*</span>
-                                            </label>
-                                            <input 
-                                                type="text" 
-                                                value={data.jugador_nombre}
-                                                onChange={e => setData('jugador_nombre', e.target.value)}
-                                                placeholder="Nombre completo del sancionado..."
-                                                className={`w-full rounded-xl border ${errors.jugador_nombre ? 'border-red-300 bg-red-50/20' : 'border-slate-200 bg-slate-50/50'} focus:bg-white focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-sm font-semibold text-slate-800 transition-all shadow-xs`}
-                                                required
-                                            />
-                                            {errors.jugador_nombre && <p className="text-red-500 text-xs font-medium mt-1">{errors.jugador_nombre}</p>}
+                                            <div>
+                                                <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">Fase <span className="text-red-500">*</span></label>
+                                                <select
+                                                    value={data.fase_id}
+                                                    onChange={e => {
+                                                        setData(prev => ({
+                                                            ...prev,
+                                                            fase_id: e.target.value,
+                                                            numero_fecha: '',
+                                                        }));
+                                                    }}
+                                                    disabled={!data.campeonato_id}
+                                                    required
+                                                    className="w-full rounded-xl border border-slate-300 bg-white py-2 px-3 text-xs sm:text-sm font-bold text-slate-800 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 disabled:opacity-50"
+                                                >
+                                                    <option value="">Seleccione Fase...</option>
+                                                    {fasesDisponibles.map(f => (
+                                                        <option key={f.id} value={f.id}>{f.nombre}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">N° Fecha <span className="text-red-500">*</span></label>
+                                                <select
+                                                    value={data.numero_fecha}
+                                                    onChange={e => setData('numero_fecha', e.target.value)}
+                                                    disabled={!data.fase_id}
+                                                    required
+                                                    className="w-full rounded-xl border border-slate-300 bg-white py-2 px-3 text-xs sm:text-sm font-bold text-slate-800 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 disabled:opacity-50"
+                                                >
+                                                    <option value="">Seleccione Fecha...</option>
+                                                    {fechasDisponibles.map(num => (
+                                                        <option key={num} value={num}>Fecha {num}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
                                         </div>
                                     </div>
 
-                                    {/* Alerta y Control de Reincidencia */}
-                                    {reincidenciaCount > 0 && (
-                                        esLiguilla && data.unidad_tiempo === 'PARTIDOS' ? (
-                                            <div className="p-3 rounded-xl bg-sky-50/90 border-2 border-sky-300/80 shadow-xs space-y-2">
-                                                <div className="flex items-center justify-between gap-2">
-                                                    <div className="flex items-center space-x-2 text-sky-950 font-black text-xs uppercase tracking-wider">
-                                                        <Info size={18} className="text-sky-600 shrink-0" />
-                                                        <span>🏆 Liguilla Detectada: Exención de Reincidencia por Partidos</span>
-                                                    </div>
-                                                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-sky-200 text-sky-900 uppercase shrink-0">
-                                                        Sin recargo de partidos
-                                                    </span>
-                                                </div>
-                                                <p className="text-xs text-sky-950 font-semibold leading-relaxed">
-                                                    En la fase de <strong>Liguilla</strong>, las expulsiones previas <strong>no suman partidos adicionales</strong> a la sanción base (borrón de reincidencia por partidos). 
-                                                    Este jugador registra {reincidenciaCount} antecedente(s) previo(s), pero se aplica únicamente la sanción base de <strong>{data.cantidad_sancion} partido(s)</strong>. Las reincidencias por tiempo (Meses/Años) sí se mantienen.
-                                                </p>
-                                                <div className="pt-2 border-t border-sky-200/60">
-                                                    <p className="text-[10px] font-black text-sky-900 uppercase tracking-wider mb-1">
-                                                        Historial de Antecedentes (Informativo):
+                                    {/* PASO 1: ¿A QUIÉN SE APLICA LA SANCIÓN? */}
+                                    <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-4">
+                                        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                                            <div className="flex items-center gap-2.5">
+                                                <span className="w-6 h-6 rounded-full bg-emerald-600 text-white text-xs font-black flex items-center justify-center shrink-0">
+                                                    1
+                                                </span>
+                                                <div>
+                                                    <h5 className="text-sm font-black text-slate-900 uppercase tracking-wide">
+                                                        ¿A quién se aplica la sanción?
+                                                    </h5>
+                                                    <p className="text-[11px] sm:text-xs text-slate-500 font-medium">
+                                                        Seleccione el tipo de sancionado y luego busque o ingrese sus datos
                                                     </p>
-                                                    <div className="max-h-24 overflow-y-auto divide-y divide-sky-200/50 pr-1">
-                                                        {antecedenteSanciones.map(prev => (
-                                                            <div key={prev.id} className="py-1 flex items-center justify-between text-[11px] text-sky-900 font-medium">
-                                                                <div className="truncate max-w-[260px]">
-                                                                    <span className="font-bold">• {prev.tipo_falta}</span> ({prev.articulo_reglamento})
-                                                                </div>
-                                                                <span className="font-extrabold text-sky-950 bg-sky-200/60 px-1.5 py-0.5 rounded text-[10px] shrink-0">
-                                                                    {prev.cantidad_sancion} {prev.unidad_tiempo}
-                                                                </span>
-                                                            </div>
-                                                        ))}
-                                                    </div>
                                                 </div>
                                             </div>
-                                        ) : (
-                                            <div className="p-3 rounded-xl bg-amber-50/90 border-2 border-amber-300/80 shadow-xs space-y-2">
-                                                <div className="flex items-center justify-between gap-2">
-                                                    <div className="flex items-center space-x-2 text-amber-950 font-black text-xs uppercase tracking-wider">
-                                                        <AlertCircle size={18} className="text-amber-600 shrink-0 animate-bounce" />
-                                                        <span>⚠️ Jugador Reincidente ({reincidenciaCount} sanción{reincidenciaCount > 1 ? 'es' : ''} previa{reincidenciaCount > 1 ? 's' : ''})</span>
+                                        </div>
+
+                                        {/* Botones de tipo de sancionado */}
+                                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-1.5 bg-slate-100 rounded-xl border border-slate-200/80">
+                                            {[
+                                                { id: 'JUGADOR', label: '⚽ Jugador' },
+                                                { id: 'TURNO', label: '📋 Turno (Director)' },
+                                                { id: 'DIRIGENTE', label: '👔 Dirigente' },
+                                                { id: 'CLUB', label: '🛡️ Club Deportivo' },
+                                            ].map(t => (
+                                                <button
+                                                    key={t.id}
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setJugadorSearch('');
+                                                        setIsManualJugador(false);
+                                                        setData(prev => ({
+                                                            ...prev,
+                                                            tipo_involucrado: t.id as any,
+                                                            ...(t.id === 'CLUB' ? { jugador_rut: '', jugador_nombre: '' } : {}),
+                                                        }));
+                                                    }}
+                                                    className={`py-2.5 px-2.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer truncate ${
+                                                        data.tipo_involucrado === t.id
+                                                            ? 'bg-emerald-600 text-white shadow-sm'
+                                                            : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
+                                                    }`}
+                                                >
+                                                    {t.label}
+                                                </button>
+                                            ))}
+                                        </div>
+
+                                        {/* Club + Datos del Sancionado */}
+                                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-5 pt-1">
+                                            {/* Selector de Club */}
+                                            <div className={data.tipo_involucrado === 'CLUB' ? 'lg:col-span-12' : 'lg:col-span-4'}>
+                                                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                                                    {data.tipo_involucrado === 'TURNO' ? '1° Club (Opcional)' : <>1° Seleccione el Club <span className="text-red-500">*</span></>}
+                                                </label>
+                                                <div className="relative">
+                                                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                                                        <Shield size={16} />
                                                     </div>
-                                                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-200 text-amber-900 uppercase shrink-0">
-                                                        {data.unidad_tiempo === 'PARTIDOS' ? `+${reincidenciaCount} Partido${reincidenciaCount > 1 ? 's' : ''} por reincidencia` : `Reincidencia por Tiempo`}
-                                                    </span>
+                                                    <select
+                                                        value={data.club_id}
+                                                        onChange={e => setData('club_id', e.target.value)}
+                                                        className={`pl-10 w-full rounded-xl border py-2.5 ${errors.club_id ? 'border-red-300 bg-red-50/20' : 'border-slate-300 bg-white'} focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-sm font-bold text-slate-800 transition-all shadow-xs`}
+                                                        required={data.tipo_involucrado !== 'TURNO'}
+                                                    >
+                                                        <option value="">
+                                                            {data.tipo_involucrado === 'TURNO'
+                                                                ? '-- Sin Club / Turno General --'
+                                                                : '-- Todos los clubes / Seleccione --'}
+                                                        </option>
+                                                        {clubes.map(club => (
+                                                            <option key={club.id} value={club.id}>{club.name}</option>
+                                                        ))}
+                                                    </select>
                                                 </div>
-
-                                                <p className="text-xs text-amber-950 font-semibold leading-relaxed">
-                                                    Este jugador registra <strong>{reincidenciaCount} expulsión/es previa(s)</strong> en el sistema (independientemente del motivo anterior).
-                                                    {data.unidad_tiempo === 'PARTIDOS' 
-                                                        ? ' Según el reglamento, se recarga +1 partido adicional por cada antecedente previo a la sanción base de la falta actual.' 
-                                                        : ' Las sanciones expresadas en tiempo (Meses/Años) mantienen la reincidencia activa.'}
+                                                <p className="text-[11px] text-slate-500 mt-1.5 font-medium">
+                                                    {data.tipo_involucrado === 'JUGADOR'
+                                                        ? 'Al elegir un club se filtran sus jugadores para encontrarlo más rápido.'
+                                                        : 'Institución deportiva a la que pertenece o se aplica la sanción.'}
                                                 </p>
+                                                {errors.club_id && <p className="text-red-500 text-xs font-semibold mt-1">{errors.club_id}</p>}
+                                            </div>
 
-                                                {data.unidad_tiempo === 'PARTIDOS' && (
-                                                    <div className="pt-2 border-t border-amber-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-                                                        <div className="text-amber-950 font-bold">
-                                                            <span>Cálculo recomendado: </span>
-                                                            <span className="font-black text-emerald-900 bg-emerald-100 px-2 py-0.5 rounded-md">
-                                                                Base ({basePartidos}) + Reincidencia (+{reincidenciaCount}) = Total {basePartidos + reincidenciaCount} Partidos
-                                                            </span>
-                                                        </div>
-
+                                            {/* Buscador de Jugador cuando es JUGADOR */}
+                                            {data.tipo_involucrado === 'JUGADOR' && (
+                                                <div className="lg:col-span-8 space-y-2.5">
+                                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                                                            2° Buscar o Seleccionar Jugador <span className="text-red-500">*</span>
+                                                        </label>
                                                         <button
                                                             type="button"
                                                             onClick={() => {
-                                                                const totalPartidos = basePartidos + reincidenciaCount;
-                                                                const notaReincid = `[Reincidencia +${reincidenciaCount} partido(s) extra por ${reincidenciaCount} sanción(es) previa(s)]`;
-                                                                let nuevaObs = data.observacion;
-                                                                if (!nuevaObs.includes('Reincidencia')) {
-                                                                    nuevaObs = nuevaObs ? `${nuevaObs} ${notaReincid}` : notaReincid;
-                                                                }
-                                                                setData(prev => ({
-                                                                    ...prev,
-                                                                    cantidad_sancion: totalPartidos,
-                                                                    observacion: nuevaObs
-                                                                }));
+                                                                setIsManualJugador(!isManualJugador);
+                                                                setJugadorSearch('');
                                                             }}
-                                                            className="inline-flex items-center justify-center px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 active:scale-95 text-white font-black text-xs rounded-xl shadow-xs transition-all shrink-0 cursor-pointer"
+                                                            className="text-xs font-extrabold text-emerald-700 hover:text-emerald-900 underline cursor-pointer"
                                                         >
-                                                            Aplicar +{reincidenciaCount} Partido{reincidenciaCount > 1 ? 's' : ''} a la Sanción
+                                                            {isManualJugador
+                                                                ? '← Volver al buscador de jugadores registrados'
+                                                                : '¿No aparece en la lista? Ingresar manualmente'}
                                                         </button>
                                                     </div>
-                                                )}
 
-                                                {/* Listado desplegable de antecedentes del jugador */}
-                                                <div className="pt-2 border-t border-amber-200/50">
-                                                    <p className="text-[10px] font-black text-amber-900 uppercase tracking-wider mb-1">
-                                                        Historial de Sanciones Previas:
+                                                    {!isManualJugador ? (
+                                                        <div className="space-y-2">
+                                                            {/* Tarjeta de jugador ya seleccionado */}
+                                                            {data.jugador_nombre ? (
+                                                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-emerald-50 border-2 border-emerald-400/80 shadow-xs">
+                                                                    <div className="flex items-center gap-3 min-w-0">
+                                                                        <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white font-black text-sm flex items-center justify-center shrink-0">
+                                                                            <CheckCircle2 size={20} />
+                                                                        </div>
+                                                                        <div className="min-w-0">
+                                                                            <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800 block">
+                                                                                ✓ Jugador Seleccionado
+                                                                            </span>
+                                                                            <p className="text-sm font-black text-slate-900 truncate">
+                                                                                {data.jugador_nombre}
+                                                                            </p>
+                                                                            <p className="text-xs font-semibold text-emerald-800 truncate">
+                                                                                RUT: {data.jugador_rut || 'Sin RUT registrado'}
+                                                                            </p>
+                                                                        </div>
+                                                                    </div>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => {
+                                                                            setData(prev => ({ ...prev, jugador_nombre: '', jugador_rut: '' }));
+                                                                            setJugadorSearch('');
+                                                                        }}
+                                                                        className="w-full sm:w-auto px-3 py-1.5 rounded-lg bg-white hover:bg-red-50 text-slate-700 hover:text-red-600 border border-slate-200 text-xs font-extrabold transition-colors shrink-0 cursor-pointer text-center"
+                                                                    >
+                                                                        Cambiar Jugador
+                                                                    </button>
+                                                                </div>
+                                                            ) : (
+                                                                <>
+                                                                    <div className="relative">
+                                                                        <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                                                                        <input
+                                                                            type="text"
+                                                                            value={jugadorSearch}
+                                                                            onChange={e => setJugadorSearch(e.target.value)}
+                                                                            placeholder="Escriba nombre, apellido o RUT para buscar rápido..."
+                                                                            className="w-full pl-10 pr-9 py-2.5 rounded-xl border border-slate-300 bg-white focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-sm font-semibold text-slate-800 shadow-xs"
+                                                                        />
+                                                                        {jugadorSearch && (
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => setJugadorSearch('')}
+                                                                                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                                                                            >
+                                                                                <X size={15} />
+                                                                            </button>
+                                                                        )}
+                                                                    </div>
+
+                                                                    <div className="border border-slate-200 rounded-xl bg-white max-h-44 overflow-y-auto divide-y divide-slate-100 shadow-xs">
+                                                                        {jugadoresFiltradosBusqueda.length > 0 ? (
+                                                                            jugadoresFiltradosBusqueda.map(j => {
+                                                                                const clubDelJugador = clubes.find(c => c.id === j.club_id);
+                                                                                return (
+                                                                                    <button
+                                                                                        key={j.id}
+                                                                                        type="button"
+                                                                                        onClick={() => {
+                                                                                            setData(prev => ({
+                                                                                                ...prev,
+                                                                                                jugador_nombre: j.nombre,
+                                                                                                jugador_rut: j.rut || '',
+                                                                                                club_id: j.club_id ? j.club_id.toString() : prev.club_id,
+                                                                                            }));
+                                                                                        }}
+                                                                                        className="w-full px-3.5 py-2.5 text-left hover:bg-emerald-50/80 flex items-center justify-between gap-3 transition-colors cursor-pointer"
+                                                                                    >
+                                                                                        <div className="min-w-0">
+                                                                                            <p className="text-xs font-extrabold text-slate-900 truncate">
+                                                                                                {j.nombre}
+                                                                                            </p>
+                                                                                            <p className="text-[11px] font-medium text-slate-500 truncate">
+                                                                                                {clubDelJugador ? clubDelJugador.name : 'Club registrado'} • RUT: {j.rut || 'Sin RUT'}
+                                                                                            </p>
+                                                                                        </div>
+                                                                                        <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-extrabold shrink-0">
+                                                                                            Elegir
+                                                                                        </span>
+                                                                                    </button>
+                                                                                );
+                                                                            })
+                                                                        ) : (
+                                                                            <div className="p-4 text-center space-y-1.5">
+                                                                                <p className="text-xs font-bold text-slate-600">
+                                                                                    No se encontraron jugadores con "{jugadorSearch}"
+                                                                                </p>
+                                                                                <button
+                                                                                    type="button"
+                                                                                    onClick={() => {
+                                                                                        setIsManualJugador(true);
+                                                                                        setData(prev => ({ ...prev, jugador_nombre: jugadorSearch }));
+                                                                                    }}
+                                                                                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-extrabold hover:bg-emerald-700 cursor-pointer"
+                                                                                >
+                                                                                    <Plus size={13} />
+                                                                                    Ingresar a "{jugadorSearch || 'nuevo jugador'}" manualmente
+                                                                                </button>
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                </>
+                                                            )}
+                                                        </div>
+                                                    ) : (
+                                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 p-3.5 sm:p-4 rounded-xl bg-amber-50/50 border border-amber-200/80">
+                                                            <div>
+                                                                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                                                                    Nombre y Apellido del Jugador <span className="text-red-500">*</span>
+                                                                </label>
+                                                                <input
+                                                                    type="text"
+                                                                    value={data.jugador_nombre}
+                                                                    onChange={e => setData('jugador_nombre', e.target.value)}
+                                                                    placeholder="Ej: Carlos Silva Rojas"
+                                                                    className="w-full rounded-xl border border-slate-300 bg-white py-2 px-3 text-sm font-semibold text-slate-800 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+                                                                    required
+                                                                />
+                                                            </div>
+                                                            <div>
+                                                                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                                                                    RUT del Jugador (Opcional)
+                                                                </label>
+                                                                <input
+                                                                    type="text"
+                                                                    value={data.jugador_rut}
+                                                                    onChange={e => {
+                                                                        let rawRut = e.target.value.replace(/[^kK0-9]/g, '');
+                                                                        if (rawRut.length === 0) {
+                                                                            setData('jugador_rut', '');
+                                                                            return;
+                                                                        }
+                                                                        let dv = rawRut.slice(-1);
+                                                                        let body = rawRut.slice(0, -1);
+                                                                        let formattedBody = body.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+                                                                        let finalRut = rawRut.length > 1 ? `${formattedBody}-${dv}` : rawRut;
+                                                                        setData('jugador_rut', finalRut.toUpperCase());
+                                                                    }}
+                                                                    placeholder="Ej: 12.345.678-9"
+                                                                    className="w-full rounded-xl border border-slate-300 bg-white py-2 px-3 text-sm font-semibold text-slate-800 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                    {errors.jugador_nombre && <p className="text-red-500 text-xs font-semibold">{errors.jugador_nombre}</p>}
+                                                    {errors.jugador_rut && <p className="text-red-500 text-xs font-semibold">{errors.jugador_rut}</p>}
+                                                </div>
+                                            )}
+
+                                            {/* Campos cuando es TURNO o DIRIGENTE */}
+                                            {(data.tipo_involucrado === 'TURNO' || data.tipo_involucrado === 'DIRIGENTE') && (
+                                                <div className="lg:col-span-8 grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4 bg-slate-50 p-3.5 sm:p-4 rounded-xl border border-slate-200/80">
+                                                    <div>
+                                                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                                                            Nombre y Apellido del {data.tipo_involucrado === 'TURNO' ? 'Turno' : 'Dirigente'} <span className="text-red-500">*</span>
+                                                        </label>
+                                                        <input
+                                                            type="text"
+                                                            value={data.jugador_nombre}
+                                                            onChange={e => setData('jugador_nombre', e.target.value)}
+                                                            placeholder={data.tipo_involucrado === 'TURNO' ? 'Ej: Pedro Morales (Turno)' : 'Ej: Juan Pérez González'}
+                                                            className={`w-full rounded-xl border py-2.5 px-3.5 ${errors.jugador_nombre ? 'border-red-300 bg-red-50/20' : 'border-slate-300 bg-white'} focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-sm font-semibold text-slate-800 transition-all shadow-xs`}
+                                                            required
+                                                        />
+                                                        {errors.jugador_nombre && <p className="text-red-500 text-xs font-medium mt-1">{errors.jugador_nombre}</p>}
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                                                            RUT del {data.tipo_involucrado === 'TURNO' ? 'Turno' : 'Dirigente'} (Opcional)
+                                                        </label>
+                                                        <input
+                                                            type="text"
+                                                            value={data.jugador_rut}
+                                                            onChange={e => {
+                                                                let rawRut = e.target.value.replace(/[^kK0-9]/g, '');
+                                                                if (rawRut.length === 0) {
+                                                                    setData('jugador_rut', '');
+                                                                    return;
+                                                                }
+                                                                let dv = rawRut.slice(-1);
+                                                                let body = rawRut.slice(0, -1);
+                                                                let formattedBody = body.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+                                                                let finalRut = rawRut.length > 1 ? `${formattedBody}-${dv}` : rawRut;
+                                                                setData('jugador_rut', finalRut.toUpperCase());
+                                                            }}
+                                                            placeholder="Ej: 12.345.678-9"
+                                                            className={`w-full rounded-xl border py-2.5 px-3.5 ${errors.jugador_rut ? 'border-red-300 bg-red-50/20' : 'border-slate-300 bg-white'} focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-sm font-semibold text-slate-800 transition-all shadow-xs`}
+                                                        />
+                                                        {errors.jugador_rut && <p className="text-red-500 text-xs font-medium mt-1">{errors.jugador_rut}</p>}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Alerta de Reincidencia (si aplica) */}
+                                        {reincidenciaCount > 0 && (
+                                            esLiguilla && data.unidad_tiempo === 'PARTIDOS' ? (
+                                                <div className="p-3.5 rounded-xl bg-sky-50/90 border-2 border-sky-300/80 shadow-xs space-y-2">
+                                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                                        <div className="flex items-center space-x-2 text-sky-950 font-black text-xs uppercase tracking-wider">
+                                                            <Info size={18} className="text-sky-600 shrink-0" />
+                                                            <span>🏆 Liguilla Detectada: Exención de Reincidencia por Partidos</span>
+                                                        </div>
+                                                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-sky-200 text-sky-900 uppercase shrink-0">
+                                                            Sin recargo de partidos
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-xs text-sky-950 font-semibold leading-relaxed">
+                                                        En la fase de <strong>Liguilla</strong>, las expulsiones previas <strong>no suman partidos adicionales</strong> a la sanción base.
+                                                        Este sancionado registra {reincidenciaCount} antecedente(s) previo(s), pero se aplica únicamente la sanción base de <strong>{data.cantidad_sancion} partido(s)</strong>.
                                                     </p>
-                                                    <div className="max-h-28 overflow-y-auto divide-y divide-amber-200/60 pr-1">
+                                                </div>
+                                            ) : (
+                                                <div className="p-3.5 rounded-xl bg-amber-50/90 border-2 border-amber-300/80 shadow-xs space-y-2">
+                                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                                        <div className="flex items-center space-x-2 text-amber-950 font-black text-xs uppercase tracking-wider">
+                                                            <AlertCircle size={18} className="text-amber-600 shrink-0" />
+                                                            <span>⚠️ Reincidente Detectado ({reincidenciaCount} sanción{reincidenciaCount > 1 ? 'es' : ''} previa{reincidenciaCount > 1 ? 's' : ''})</span>
+                                                        </div>
+                                                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-200 text-amber-900 uppercase shrink-0">
+                                                            {data.unidad_tiempo === 'PARTIDOS' ? `+${reincidenciaCount} Partido${reincidenciaCount > 1 ? 's' : ''} por reincidencia` : 'Reincidencia activa'}
+                                                        </span>
+                                                    </div>
+                                                    <div className="max-h-24 overflow-y-auto divide-y divide-amber-200/60 pr-1">
                                                         {antecedenteSanciones.map(prev => (
-                                                            <div key={prev.id} className="py-1 flex items-center justify-between text-[11px] text-amber-900 font-medium">
-                                                                <div className="truncate max-w-[260px]">
+                                                            <div key={prev.id} className="py-1 flex items-center justify-between gap-2 text-[11px] text-amber-900 font-medium">
+                                                                <div className="truncate min-w-0">
                                                                     <span className="font-bold">• {prev.tipo_falta}</span> ({prev.articulo_reglamento})
                                                                 </div>
                                                                 <span className="font-extrabold text-amber-950 bg-amber-200/60 px-1.5 py-0.5 rounded text-[10px] shrink-0">
@@ -817,226 +1097,361 @@ export default function TribunalDashboard({
                                                         ))}
                                                     </div>
                                                 </div>
-                                            </div>
-                                        )
-                                    )}
+                                            )
+                                        )}
+                                    </div>
 
-                                    {/* Fila 3: Infracción & Artículo */}
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div>
-                                            <div className="flex justify-between items-center mb-1.5">
-                                                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                                                    Tipo Infracción / REF <span className="text-red-500">*</span>
-                                                </label>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setIsCreandoReferencia(!isCreandoReferencia)}
-                                                    className="inline-flex items-center text-[11px] font-bold text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded-md border border-emerald-200 transition-colors"
-                                                >
-                                                    <Plus size={12} className="mr-1" />
-                                                    Nueva referencia
-                                                </button>
+                                    {/* PASO 2: MOTIVO E INFRACCIÓN REGLAMENTARIA */}
+                                    <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-4">
+                                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                                            <div className="flex items-center gap-2.5">
+                                                <span className="w-6 h-6 rounded-full bg-emerald-600 text-white text-xs font-black flex items-center justify-center shrink-0">
+                                                    2
+                                                </span>
+                                                <div>
+                                                    <h5 className="text-sm font-black text-slate-900 uppercase tracking-wide">
+                                                        Motivo e Infracción Reglamentaria
+                                                    </h5>
+                                                    <p className="text-[11px] sm:text-xs text-slate-500 font-medium">
+                                                        Elija una causal frecuente o escriba una infracción personalizada junto a su artículo
+                                                    </p>
+                                                </div>
                                             </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsCreandoReferencia(!isCreandoReferencia)}
+                                                className="inline-flex items-center text-xs font-extrabold text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-xl border border-emerald-200 transition-colors cursor-pointer"
+                                            >
+                                                <Plus size={14} className="mr-1 shrink-0" />
+                                                <span>Guardar nueva referencia frecuente</span>
+                                            </button>
+                                        </div>
 
-                                            {isCreandoReferencia && (
-                                                <div className="mb-3 p-2 bg-emerald-50 border border-emerald-200 rounded-xl flex gap-2 items-center">
-                                                    <input
-                                                        type="text"
-                                                        value={nuevaReferencia}
-                                                        onChange={e => setNuevaReferencia(e.target.value)}
-                                                        placeholder="Nombre nueva referencia..."
-                                                        className="flex-1 rounded-lg border-emerald-300 text-xs font-bold text-slate-900 py-1.5 px-3 focus:ring-2 focus:ring-emerald-600"
-                                                    />
+                                        {isCreandoReferencia && (
+                                            <div className="p-3 bg-emerald-50/90 border border-emerald-200 rounded-xl flex flex-col sm:flex-row gap-2 sm:items-center">
+                                                <input
+                                                    type="text"
+                                                    value={nuevaReferencia}
+                                                    onChange={e => setNuevaReferencia(e.target.value)}
+                                                    placeholder="Escriba el nombre de la referencia frecuente (ej: Agresión verbal al árbitro)..."
+                                                    className="flex-1 rounded-xl border-emerald-300 text-xs font-bold text-slate-900 py-2 px-3.5 focus:ring-2 focus:ring-emerald-600"
+                                                />
+                                                <div className="flex items-center gap-2">
                                                     <button
                                                         type="button"
                                                         onClick={handleGuardarNuevaReferencia}
-                                                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg shadow-sm"
+                                                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl shadow-xs cursor-pointer"
                                                     >
-                                                        Guardar
+                                                        Guardar en la lista
                                                     </button>
                                                     <button
                                                         type="button"
                                                         onClick={() => setIsCreandoReferencia(false)}
-                                                        className="px-2 py-1.5 text-slate-400 hover:text-slate-600"
+                                                        className="px-2.5 py-2 text-slate-500 hover:text-slate-700 text-xs font-bold cursor-pointer"
                                                     >
-                                                        <X size={15} />
+                                                        Cancelar
                                                     </button>
                                                 </div>
-                                            )}
+                                            </div>
+                                        )}
 
-                                            <select 
-                                                value={referencias.some(r => r.nombre === data.tipo_falta) ? data.tipo_falta : (data.tipo_falta ? 'OTRO' : '')}
-                                                onChange={e => {
-                                                    const val = e.target.value;
-                                                    if (val !== 'OTRO') {
-                                                        setData('tipo_falta', val);
-                                                    } else if (data.tipo_falta && referencias.some(r => r.nombre === data.tipo_falta)) {
-                                                        setData('tipo_falta', '');
-                                                    }
-                                                }}
-                                                className={`w-full rounded-xl border ${errors.tipo_falta ? 'border-red-300 bg-red-50/20' : 'border-slate-200 bg-slate-50/50'} focus:bg-white focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-sm font-semibold text-slate-800 transition-all shadow-xs mb-2`}
-                                            >
-                                                <option value="">Seleccione una Referencia / Infracción...</option>
-                                                {referencias.map(r => (
-                                                    <option key={r.id} value={r.nombre}>REF: {r.nombre}</option>
-                                                ))}
-                                                <option value="OTRO">✏️ Otra referencia personalizada...</option>
-                                            </select>
+                                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-5">
+                                            <div className="lg:col-span-7 space-y-2">
+                                                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                                                    Tipo de Infracción / Referencia (REF:) <span className="text-red-500">*</span>
+                                                </label>
+                                                <select
+                                                    value={esFaltaPersonalizada ? 'OTRO' : (referencias.some(r => r.nombre === data.tipo_falta) ? data.tipo_falta : (data.tipo_falta ? 'OTRO' : ''))}
+                                                    onChange={e => {
+                                                        const val = e.target.value;
+                                                        if (val === 'OTRO') {
+                                                            setEsFaltaPersonalizada(true);
+                                                            if (referencias.some(r => r.nombre === data.tipo_falta)) {
+                                                                setData('tipo_falta', '');
+                                                            }
+                                                        } else {
+                                                            setEsFaltaPersonalizada(false);
+                                                            setData('tipo_falta', val);
+                                                        }
+                                                    }}
+                                                    className={`w-full rounded-xl border py-2.5 px-3.5 ${errors.tipo_falta ? 'border-red-300 bg-red-50/20' : 'border-slate-300 bg-white'} focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-sm font-bold text-slate-800 transition-all shadow-xs`}
+                                                >
+                                                    <option value="">-- Seleccione una Referencia / Infracción --</option>
+                                                    {referencias.map(r => (
+                                                        <option key={r.id} value={r.nombre}>REF: {r.nombre}</option>
+                                                    ))}
+                                                    <option value="OTRO">✏️ Escribir otra infracción personalizada...</option>
+                                                </select>
 
-                                            {(!referencias.some(r => r.nombre === data.tipo_falta)) && (
+                                                {(esFaltaPersonalizada || (data.tipo_falta !== '' && !referencias.some(r => r.nombre === data.tipo_falta))) && (
+                                                    <input
+                                                        type="text"
+                                                        value={data.tipo_falta}
+                                                        onChange={e => setData('tipo_falta', e.target.value)}
+                                                        placeholder="Escriba aquí la infracción o motivo personalizado..."
+                                                        className="w-full rounded-xl border border-emerald-400 bg-emerald-50/30 py-2.5 px-3.5 focus:bg-white focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-sm font-semibold text-slate-800 transition-all shadow-xs"
+                                                        required
+                                                    />
+                                                )}
+                                                {errors.tipo_falta && <p className="text-red-500 text-xs font-medium mt-1">{errors.tipo_falta}</p>}
+                                            </div>
+
+                                            <div className="lg:col-span-5">
+                                                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                                                    Art. / Letra del Reglamento <span className="text-red-500">*</span>
+                                                </label>
                                                 <input
                                                     type="text"
-                                                    value={data.tipo_falta}
-                                                    onChange={e => setData('tipo_falta', e.target.value)}
-                                                    placeholder="Escriba la infracción personalizada..."
-                                                    className="w-full rounded-xl border border-slate-200 bg-white focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-sm font-semibold text-slate-800 transition-all shadow-xs"
+                                                    value={data.articulo_reglamento}
+                                                    onChange={e => setData('articulo_reglamento', e.target.value)}
+                                                    placeholder="Ej: Art. 209 Letra G"
+                                                    className={`w-full rounded-xl border py-2.5 px-3.5 ${errors.articulo_reglamento ? 'border-red-300 bg-red-50/20' : 'border-slate-300 bg-white'} focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-sm font-semibold text-slate-800 transition-all shadow-xs`}
                                                     required
                                                 />
-                                            )}
-                                            {errors.tipo_falta && <p className="text-red-500 text-xs font-medium mt-1">{errors.tipo_falta}</p>}
-                                        </div>
-
-                                        <div>
-                                            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                                                Art. / Letra Reglamento <span className="text-red-500">*</span>
-                                            </label>
-                                            <input 
-                                                type="text" 
-                                                value={data.articulo_reglamento}
-                                                onChange={e => setData('articulo_reglamento', e.target.value)}
-                                                placeholder="Ej: Art 209 Letra G"
-                                                className={`w-full rounded-xl border ${errors.articulo_reglamento ? 'border-red-300 bg-red-50/20' : 'border-slate-200 bg-slate-50/50'} focus:bg-white focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-sm font-semibold text-slate-800 transition-all shadow-xs`}
-                                                required 
-                                            />
-                                            {errors.articulo_reglamento && <p className="text-red-500 text-xs font-medium mt-1">{errors.articulo_reglamento}</p>}
+                                                {errors.articulo_reglamento && <p className="text-red-500 text-xs font-medium mt-1">{errors.articulo_reglamento}</p>}
+                                            </div>
                                         </div>
                                     </div>
 
-                                    {/* Fila 4: Duración & Fecha */}
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div>
-                                            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                                                Duración de la Sanción <span className="text-red-500">*</span>
-                                            </label>
+                                    {/* PASO 3: SANCIÓN, FECHA Y OBSERVACIONES */}
+                                    <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-4">
+                                        <div className="flex items-center gap-2.5 border-b border-slate-100 pb-3">
+                                            <span className="w-6 h-6 rounded-full bg-emerald-600 text-white text-xs font-black flex items-center justify-center shrink-0">
+                                                3
+                                            </span>
+                                            <div>
+                                                <h5 className="text-sm font-black text-slate-900 uppercase tracking-wide">
+                                                    Tipo de Sanción, Duración y Observaciones
+                                                </h5>
+                                                <p className="text-[11px] sm:text-xs text-slate-500 font-medium">
+                                                    Indique si corresponde suspensión por partidos, por tiempo o Carta de Amonestación
+                                                </p>
+                                            </div>
+                                        </div>
 
-                                            {reincidenciaAplica && data.unidad_tiempo === 'PARTIDOS' ? (
-                                                <div className="bg-amber-50/90 p-3 rounded-xl border-2 border-amber-300 text-xs space-y-2 shadow-xs">
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="font-extrabold text-amber-950">Sanción Base por Infracción:</span>
-                                                        <div className="flex items-center space-x-1.5">
-                                                            <input 
-                                                                type="number" min="1" required
-                                                                value={basePartidos}
-                                                                onChange={e => setBasePartidos(Math.max(1, parseInt(e.target.value) || 1))}
-                                                                className="w-16 border border-amber-300 bg-white text-center font-black text-slate-900 text-sm rounded-lg py-1 focus:ring-2 focus:ring-amber-500 shadow-xs"
-                                                            />
-                                                            <span className="font-bold text-amber-950">partidos</span>
+                                        {/* Selector visual del Tipo de Sanción */}
+                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 p-1.5 bg-slate-100 rounded-xl border border-slate-200/80">
+                                            <button
+                                                type="button"
+                                                onClick={() => setData(prev => ({
+                                                    ...prev,
+                                                    unidad_tiempo: 'PARTIDOS',
+                                                    tipo_sancion: 'PARTIDOS',
+                                                    estado: 'ACTIVO',
+                                                }))}
+                                                className={`py-2.5 px-3 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+                                                    data.unidad_tiempo === 'PARTIDOS'
+                                                        ? 'bg-emerald-600 text-white shadow-sm'
+                                                        : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
+                                                }`}
+                                            >
+                                                ⚽ Suspensión por Partidos
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setData(prev => ({
+                                                    ...prev,
+                                                    unidad_tiempo: prev.unidad_tiempo === 'AÑOS' ? 'AÑOS' : 'MESES',
+                                                    tipo_sancion: 'TIEMPO',
+                                                    estado: 'ACTIVO',
+                                                }))}
+                                                className={`py-2.5 px-3 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+                                                    data.unidad_tiempo === 'MESES' || data.unidad_tiempo === 'AÑOS'
+                                                        ? 'bg-emerald-600 text-white shadow-sm'
+                                                        : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
+                                                }`}
+                                            >
+                                                🗓️ Suspensión por Meses / Años
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setData(prev => ({
+                                                    ...prev,
+                                                    unidad_tiempo: 'AMONESTACION',
+                                                    tipo_sancion: 'AMONESTACION',
+                                                    cantidad_sancion: 1,
+                                                    estado: 'CUMPLIDO',
+                                                }))}
+                                                className={`py-2.5 px-3 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+                                                    data.unidad_tiempo === 'AMONESTACION'
+                                                        ? 'bg-amber-600 text-white shadow-sm'
+                                                        : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
+                                                }`}
+                                            >
+                                                📄 Carta de Amonestación
+                                            </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-5 items-start">
+                                            <div className="lg:col-span-7">
+                                                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                                                    {data.unidad_tiempo === 'AMONESTACION' ? 'Modalidad de Amonestación' : 'Cantidad / Duración de la Sanción'} <span className="text-red-500">*</span>
+                                                </label>
+
+                                                {data.unidad_tiempo === 'AMONESTACION' ? (
+                                                    <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200/90 flex items-start gap-3">
+                                                        <FileText size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                                                        <div className="text-xs text-amber-950 font-medium leading-relaxed">
+                                                            <span className="font-extrabold block text-amber-900">Carta de Amonestación Escrita (Sin suspensión)</span>
+                                                            Genera el documento formal en PDF firmado por Presidencia y Secretaría sin restar fechas de partido.
                                                         </div>
                                                     </div>
+                                                ) : reincidenciaAplica && data.unidad_tiempo === 'PARTIDOS' ? (
+                                                    <div className="bg-amber-50/90 p-3.5 rounded-xl border-2 border-amber-300 text-xs space-y-2 shadow-xs">
+                                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                                            <span className="font-extrabold text-amber-950">Sanción Base por Infracción:</span>
+                                                            <div className="flex items-center space-x-2">
+                                                                <input
+                                                                    type="number"
+                                                                    min="1"
+                                                                    required
+                                                                    value={basePartidos}
+                                                                    onChange={e => setBasePartidos(Math.max(1, parseInt(e.target.value) || 1))}
+                                                                    className="w-20 border border-amber-300 bg-white text-center font-black text-slate-900 text-sm rounded-lg py-1.5 focus:ring-2 focus:ring-amber-500 shadow-xs"
+                                                                />
+                                                                <span className="font-bold text-amber-950">Partidos</span>
+                                                            </div>
+                                                        </div>
 
-                                                    <div className="flex items-center justify-between text-amber-950 pt-1.5 border-t border-amber-200/80 font-bold">
-                                                        <span>+ Recargo Reincidencia ({reincidenciaCount} expulsión{reincidenciaCount > 1 ? 'es' : ''} previa{reincidenciaCount > 1 ? 's' : ''}):</span>
-                                                        <span className="font-black text-amber-900 bg-amber-200/80 px-2 py-0.5 rounded text-xs">+ {reincidenciaCount} partido{reincidenciaCount > 1 ? 's' : ''}</span>
-                                                    </div>
+                                                        <div className="flex items-center justify-between text-amber-950 pt-1.5 border-t border-amber-200/80 font-bold">
+                                                            <span>+ Recargo Reincidencia ({reincidenciaCount} previa{reincidenciaCount > 1 ? 's' : ''}):</span>
+                                                            <span className="font-black text-amber-900 bg-amber-200/80 px-2 py-0.5 rounded text-xs">
+                                                                + {reincidenciaCount} partido{reincidenciaCount > 1 ? 's' : ''}
+                                                            </span>
+                                                        </div>
 
-                                                    <div className="flex items-center justify-between text-emerald-950 pt-1.5 border-t border-amber-300 font-extrabold text-xs">
-                                                        <span>Total a Aplicar (Base + Reincidencia):</span>
-                                                        <span className="font-black text-sm text-emerald-900 bg-emerald-200 px-3 py-1 rounded-lg border border-emerald-400 shadow-xs">
-                                                            = {basePartidos + reincidenciaCount} Partidos
-                                                        </span>
+                                                        <div className="flex items-center justify-between text-emerald-950 pt-1.5 border-t border-amber-300 font-extrabold text-xs">
+                                                            <span>Total a Aplicar (Base + Reincidencia):</span>
+                                                            <span className="font-black text-sm text-emerald-900 bg-emerald-200 px-3 py-1 rounded-lg border border-emerald-400 shadow-xs">
+                                                                = {basePartidos + reincidenciaCount} Partidos
+                                                            </span>
+                                                        </div>
                                                     </div>
-                                                </div>
-                                            ) : (
-                                                <div>
-                                                    <div className="flex rounded-xl overflow-hidden border border-slate-200 focus-within:border-emerald-500 focus-within:ring-4 focus-within:ring-emerald-500/10 shadow-xs bg-slate-50/50">
-                                                        <input 
-                                                            type="number" min="1" required
+                                                ) : data.unidad_tiempo === 'PARTIDOS' ? (
+                                                    <div className="space-y-2">
+                                                        <div className="flex flex-wrap items-center gap-3">
+                                                            <input
+                                                                type="number"
+                                                                min="1"
+                                                                required
+                                                                value={data.cantidad_sancion}
+                                                                onChange={e => setData('cantidad_sancion', Math.max(1, parseInt(e.target.value) || 1))}
+                                                                className="w-20 sm:w-24 rounded-xl border border-slate-300 bg-white py-2.5 text-center font-black text-slate-900 text-base focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 shadow-xs"
+                                                            />
+                                                            <span className="text-sm font-extrabold text-slate-700">
+                                                                Partido(s) de suspensión
+                                                            </span>
+                                                            <div className="flex items-center gap-1 sm:ml-auto">
+                                                                {[1, 2, 3, 4, 5].map(num => (
+                                                                    <button
+                                                                        key={num}
+                                                                        type="button"
+                                                                        onClick={() => setData('cantidad_sancion', num)}
+                                                                        className={`w-8 h-8 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                                                                            data.cantidad_sancion === num
+                                                                                ? 'bg-emerald-600 text-white shadow-xs'
+                                                                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                                        }`}
+                                                                    >
+                                                                        {num}
+                                                                    </button>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ) : (
+                                                    <div className="flex rounded-xl overflow-hidden border border-slate-300 focus-within:border-emerald-500 focus-within:ring-4 focus-within:ring-emerald-500/10 shadow-xs bg-white">
+                                                        <input
+                                                            type="number"
+                                                            min="1"
+                                                            required
                                                             value={data.cantidad_sancion}
-                                                            onChange={e => setData('cantidad_sancion', parseInt(e.target.value) || 1)}
-                                                            className="w-24 border-0 bg-transparent text-center font-extrabold text-slate-800 text-sm focus:ring-0"
+                                                            onChange={e => setData('cantidad_sancion', Math.max(1, parseInt(e.target.value) || 1))}
+                                                            className="w-24 border-0 border-r border-slate-200 bg-slate-50 text-center font-black text-slate-900 text-base py-2.5 focus:ring-0"
                                                         />
-                                                        <select 
+                                                        <select
                                                             value={data.unidad_tiempo}
                                                             onChange={e => {
-                                                                const unit = e.target.value as 'PARTIDOS' | 'MESES' | 'AÑOS';
+                                                                const unit = e.target.value as 'MESES' | 'AÑOS';
                                                                 setData(prev => ({
                                                                     ...prev,
                                                                     unidad_tiempo: unit,
-                                                                    tipo_sancion: unit === 'PARTIDOS' ? 'PARTIDOS' : 'TIEMPO'
+                                                                    tipo_sancion: 'TIEMPO',
                                                                 }));
                                                             }}
-                                                            className="flex-1 border-0 border-l border-slate-200 bg-white font-semibold text-slate-700 text-sm focus:ring-0"
+                                                            className="flex-1 border-0 bg-white font-bold text-slate-800 text-sm py-2.5 focus:ring-0"
                                                         >
-                                                            <option value="PARTIDOS">Partidos</option>
-                                                            <option value="MESES">Meses</option>
-                                                            <option value="AÑOS">Años</option>
+                                                            <option value="MESES">Meses de suspensión</option>
+                                                            <option value="AÑOS">Años de suspensión</option>
                                                         </select>
                                                     </div>
-                                                    {esLiguilla && reincidenciaCount > 0 && data.unidad_tiempo === 'PARTIDOS' && (
-                                                        <p className="text-[11px] text-sky-700 font-semibold mt-1.5 flex items-center gap-1">
-                                                            <Info size={13} className="shrink-0 text-sky-600" />
-                                                            Liguilla activa: Exento de recargo por partidos (se mantiene reincidencia en meses/años).
-                                                        </p>
-                                                    )}
-                                                </div>
-                                            )}
-                                            {errors.cantidad_sancion && <p className="text-red-500 text-xs font-medium mt-1">{errors.cantidad_sancion}</p>}
+                                                )}
+                                                {errors.cantidad_sancion && <p className="text-red-500 text-xs font-medium mt-1">{errors.cantidad_sancion}</p>}
+                                            </div>
+
+                                            <div className="lg:col-span-5">
+                                                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                                                    Fecha de Resolución <span className="text-red-500">*</span>
+                                                </label>
+                                                <input
+                                                    type="date"
+                                                    required
+                                                    value={data.fecha_resolucion}
+                                                    onChange={e => setData('fecha_resolucion', e.target.value)}
+                                                    className={`w-full rounded-xl border py-2.5 px-3.5 ${errors.fecha_resolucion ? 'border-red-300 bg-red-50/20' : 'border-slate-300 bg-white'} focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-sm font-semibold text-slate-800 transition-all shadow-xs`}
+                                                />
+                                                {errors.fecha_resolucion && <p className="text-red-500 text-xs font-medium mt-1">{errors.fecha_resolucion}</p>}
+                                            </div>
                                         </div>
 
-                                        <div>
+                                        {/* Observación */}
+                                        <div className="pt-1">
                                             <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                                                Fecha de Resolución <span className="text-red-500">*</span>
+                                                Descripción / Observación Adicional <span className="text-slate-400 font-medium lowercase">(opcional)</span>
                                             </label>
-                                            <input 
-                                                type="date" required
-                                                value={data.fecha_resolucion}
-                                                onChange={e => setData('fecha_resolucion', e.target.value)}
-                                                className={`w-full rounded-xl border ${errors.fecha_resolucion ? 'border-red-300 bg-red-50/20' : 'border-slate-200 bg-slate-50/50'} focus:bg-white focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-sm font-semibold text-slate-800 transition-all shadow-xs`}
+                                            <textarea
+                                                rows={2}
+                                                value={data.observacion}
+                                                onChange={e => setData('observacion', e.target.value)}
+                                                placeholder="Detalles adicionales sobre los hechos o consideraciones del fallo..."
+                                                className="w-full rounded-xl border border-slate-300 bg-white focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-sm font-medium text-slate-800 transition-all shadow-xs resize-none py-2.5 px-3.5"
                                             />
-                                            {errors.fecha_resolucion && <p className="text-red-500 text-xs font-medium mt-1">{errors.fecha_resolucion}</p>}
                                         </div>
                                     </div>
+                                </div>
 
-                                    {/* Fila 5: Observación */}
-                                    <div>
-                                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                                            Descripción / Observación <span className="text-slate-400 font-medium lowercase">(opcional)</span>
-                                        </label>
-                                        <textarea 
-                                            rows={2}
-                                            value={data.observacion}
-                                            onChange={e => setData('observacion', e.target.value)}
-                                            placeholder="Detalles adicionales sobre los hechos o consideraciones del fallo..."
-                                            className="w-full rounded-xl border border-slate-200 bg-slate-50/50 focus:bg-white focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-sm font-medium text-slate-800 transition-all shadow-xs resize-none"
-                                        />
-                                    </div>
-
-                            </div>
-
-                                    {/* Actions */}
-                                    <div className="flex items-center justify-end space-x-3 px-5 py-3 border-t border-slate-200 bg-slate-50">
-                                        <button 
-                                            type="button" 
-                                            onClick={closeForm}
-                                            className="px-5 py-2.5 rounded-xl font-bold text-sm text-slate-600 bg-slate-100 hover:bg-slate-200 transition-all"
-                                        >
-                                            Cancelar
-                                        </button>
-                                        <button 
-                                            type="submit" 
-                                            disabled={processing}
-                                            className="px-6 py-2.5 rounded-xl font-extrabold text-sm text-white bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] disabled:opacity-50 transition-all shadow-md shadow-emerald-600/25 flex items-center gap-2"
-                                        >
-                                            {processing ? (
-                                                <>
-                                                    <Loader2 size={16} className="animate-spin" />
-                                                    <span>Guardando...</span>
-                                                </>
-                                            ) : (
-                                                <span>{editingSancionId ? 'Actualizar Sanción' : 'Guardar Sanción'}</span>
-                                            )}
-                                        </button>
-                                    </div>
+                                {/* Actions Footer fijo siempre visible */}
+                                <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 px-4 py-3 sm:px-6 sm:py-4 border-t border-slate-200 bg-white shrink-0">
+                                    <button
+                                        type="button"
+                                        onClick={closeForm}
+                                        className="w-full sm:w-auto px-5 py-2.5 rounded-xl font-bold text-sm text-slate-600 bg-slate-100 hover:bg-slate-200 transition-all cursor-pointer text-center"
+                                    >
+                                        Cancelar
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        disabled={processing}
+                                        className={`w-full sm:w-auto px-6 py-2.5 rounded-xl font-extrabold text-sm text-white active:scale-[0.99] disabled:opacity-50 transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer ${
+                                            data.unidad_tiempo === 'AMONESTACION'
+                                                ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-600/25'
+                                                : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/25'
+                                        }`}
+                                    >
+                                        {processing ? (
+                                            <>
+                                                <Loader2 size={16} className="animate-spin" />
+                                                <span>Guardando...</span>
+                                            </>
+                                        ) : (
+                                            <span>
+                                                {editingSancionId
+                                                    ? (data.unidad_tiempo === 'AMONESTACION' ? 'Actualizar Carta de Amonestación' : 'Actualizar Sanción')
+                                                    : (data.unidad_tiempo === 'AMONESTACION' ? 'Guardar Carta de Amonestación' : 'Guardar Sanción')}
+                                            </span>
+                                        )}
+                                    </button>
+                                </div>
                             </form>
                         </div>
                     </Modal>
@@ -1114,6 +1529,7 @@ export default function TribunalDashboard({
                                     <option value="">Todos los Estados</option>
                                     <option value="ACTIVO">Activos</option>
                                     <option value="CUMPLIDO">Cumplidos</option>
+                                    <option value="AMONESTACION">📄 Cartas de Amonestación</option>
                                 </select>
                                 <select
                                     value={filterFecha}
@@ -1154,7 +1570,7 @@ export default function TribunalDashboard({
                                     </div>
                                     
                                     <div className="flex items-center space-x-3 mb-4">
-                                        {sancion.club.crest ? (
+                                        {sancion.club?.crest ? (
                                             <img
                                                 src={sancion.club.crest.startsWith('http') || sancion.club.crest.startsWith('/') ? sancion.club.crest : `/storage/${sancion.club.crest}`}
                                                 alt={sancion.club.name}
@@ -1163,22 +1579,40 @@ export default function TribunalDashboard({
                                             />
                                         ) : (
                                             <div className="w-12 h-12 rounded-full bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center text-sm font-extrabold text-slate-500 shadow-sm border border-slate-200">
-                                                {sancion.club.name.substring(0,2).toUpperCase()}
+                                                {(sancion.club?.name || 'TU').substring(0,2).toUpperCase()}
                                             </div>
                                         )}
                                         <div>
-                                            <div className="font-bold text-slate-900 text-sm">{sancion.jugador?.nombre || 'Sanción al Club'}</div>
-                                            <div className="font-medium text-xs text-slate-500">{sancion.club.name}</div>
+                                            <div className="font-bold text-slate-900 text-sm">
+                                                {sancion.jugador?.nombre || sancion.nombre_involucrado || 'Sanción al Club'}
+                                            </div>
+                                            <div className="font-medium text-xs text-slate-500">
+                                                {sancion.tipo_involucrado === 'TURNO' && 'Turno • '}
+                                                {sancion.tipo_involucrado === 'DIRIGENTE' && 'Dirigente • '}
+                                                {sancion.club?.name || 'Sin club'}
+                                            </div>
                                         </div>
                                     </div>
 
                                     <div className="bg-slate-50 rounded-lg p-3 border border-slate-100 mb-4 flex justify-between items-center">
                                         <div className="flex items-center space-x-2">
-                                            <div className={`flex items-center justify-center w-6 h-6 rounded bg-${sancion.tipo_sancion === 'PARTIDOS' ? 'red' : 'orange'}-100 text-${sancion.tipo_sancion === 'PARTIDOS' ? 'red' : 'orange'}-600`}>
-                                                {sancion.tipo_sancion === 'PARTIDOS' ? <AlertCircle size={14} /> : <CalendarClock size={14} />}
+                                            <div className={`flex items-center justify-center w-6 h-6 rounded ${
+                                                sancion.tipo_sancion === 'PARTIDOS'
+                                                    ? 'bg-red-100 text-red-600'
+                                                    : sancion.tipo_sancion === 'AMONESTACION'
+                                                        ? 'bg-amber-100 text-amber-700'
+                                                        : 'bg-orange-100 text-orange-600'
+                                            }`}>
+                                                {sancion.tipo_sancion === 'PARTIDOS'
+                                                    ? <AlertCircle size={14} />
+                                                    : sancion.tipo_sancion === 'AMONESTACION'
+                                                        ? <FileText size={14} />
+                                                        : <CalendarClock size={14} />}
                                             </div>
                                             <span className="font-extrabold text-sm text-slate-800">
-                                                {sancion.cantidad_sancion} {sancion.unidad_tiempo.toLowerCase()}
+                                                {sancion.tipo_sancion === 'AMONESTACION' || sancion.unidad_tiempo === 'AMONESTACION'
+                                                    ? 'Carta de Amonestación'
+                                                    : `${sancion.cantidad_sancion} ${sancion.unidad_tiempo.toLowerCase()}`}
                                             </span>
                                         </div>
                                         <button 
@@ -1208,10 +1642,18 @@ export default function TribunalDashboard({
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         onClick={(e) => e.stopPropagation()}
-                                        className="w-full flex items-center justify-center space-x-2 py-2.5 rounded-lg bg-white border border-slate-200 text-slate-600 font-bold text-xs hover:bg-green-50 hover:text-green-700 hover:border-green-200 transition-colors"
+                                        className={`w-full flex items-center justify-center space-x-2 py-2.5 rounded-xl font-black text-xs border transition-colors ${
+                                            sancion.tipo_sancion === 'AMONESTACION' || sancion.unidad_tiempo === 'AMONESTACION'
+                                                ? 'bg-amber-50 border-amber-300 text-amber-900 hover:bg-amber-100'
+                                                : 'bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100'
+                                        }`}
                                     >
                                         <FileDown size={16} />
-                                        <span>Ver / Descargar Oficio</span>
+                                        <span>
+                                            {sancion.tipo_sancion === 'AMONESTACION' || sancion.unidad_tiempo === 'AMONESTACION'
+                                                ? 'Descargar Carta de Amonestación PDF'
+                                                : 'Descargar Oficio PDF'}
+                                        </span>
                                     </a>
                                 </div>
                             ))}
@@ -1228,121 +1670,155 @@ export default function TribunalDashboard({
                             <table className="w-full text-left text-sm text-slate-600">
                                 <thead className="text-xs text-slate-500 uppercase bg-slate-50/50 border-b border-slate-100 tracking-wider">
                                     <tr>
-                                        <th className="px-6 py-4 font-bold">Torneo / Fecha</th>
-                                        <th className="px-6 py-4 font-bold">Club y Jugador</th>
-                                        <th className="px-6 py-4 font-bold">Sanción</th>
-                                        <th className="px-6 py-4 font-bold text-center">Estado</th>
-                                        <th className="px-6 py-4 font-bold text-right">Acciones</th>
+                                        <th className="px-4 lg:px-6 py-3.5 font-bold whitespace-nowrap">Torneo / Fecha</th>
+                                        <th className="px-4 lg:px-6 py-3.5 font-bold">Club y Sancionado</th>
+                                        <th className="px-4 lg:px-6 py-3.5 font-bold whitespace-nowrap">Sanción</th>
+                                        <th className="px-4 lg:px-6 py-3.5 font-bold text-center whitespace-nowrap">Estado</th>
+                                        <th className="px-4 lg:px-6 py-3.5 font-bold text-center whitespace-nowrap">Documento PDF</th>
+                                        <th className="px-4 lg:px-6 py-3.5 font-bold text-right whitespace-nowrap">Acciones</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100/80">
                                     {paginatedSanciones.map((sancion) => (
                                         <tr key={sancion.id} className="hover:bg-green-50/30 transition-colors duration-200 group">
-                                            <td className="px-6 py-4">
+                                            <td className="px-4 lg:px-6 py-3.5 whitespace-nowrap">
                                                 <div className="text-xs font-extrabold text-slate-900">{sancion.campeonato?.nombre || 'S/N'}</div>
                                                 <div className="text-xs font-medium text-slate-500 mt-0.5">{sancion.fase?.nombre || 'S/N'} • Fecha {sancion.numero_fecha}</div>
                                             </td>
-                                            <td className="px-6 py-4">
+                                            <td className="px-4 lg:px-6 py-3.5">
                                                 <div className="flex items-center space-x-3">
                                                     {sancion.jugador ? (
-                                                        <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-sm font-extrabold text-slate-600 shadow-inner border border-slate-200/50">
+                                                        <div className="w-9 h-9 rounded-full bg-slate-100 flex items-center justify-center text-xs font-extrabold text-slate-600 shadow-inner border border-slate-200/50 shrink-0">
                                                             {sancion.jugador.nombre.substring(0, 1).toUpperCase()}
                                                             {sancion.jugador.nombre.split(' ').length > 1 ? sancion.jugador.nombre.split(' ')[1].substring(0, 1).toUpperCase() : ''}
                                                         </div>
                                                     ) : (
-                                                        <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 shadow-inner border border-slate-200/50">
-                                                            <User size={18} />
+                                                        <div className="w-9 h-9 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 shadow-inner border border-slate-200/50 shrink-0">
+                                                            <User size={16} />
                                                         </div>
                                                     )}
-                                                    <div>
-                                                        <div className="flex items-center space-x-2">
-                                                            <span className="font-bold text-slate-900 group-hover:text-green-700 transition-colors">{sancion.jugador?.nombre || 'Sanción al Club'}</span>
-                                                            {sanciones.filter(s => s.jugador?.rut && s.jugador?.rut === sancion.jugador?.rut).length > 1 && (
-                                                                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300 shadow-xs inline-flex items-center gap-0.5" title="Jugador Reincidente">
+                                                    <div className="min-w-0">
+                                                        <div className="flex flex-wrap items-center gap-1.5">
+                                                            <span className="font-bold text-slate-900 group-hover:text-green-700 transition-colors">
+                                                                {sancion.jugador?.nombre || sancion.nombre_involucrado || 'Sanción al Club'}
+                                                            </span>
+                                                            {sancion.tipo_involucrado === 'TURNO' && (
+                                                                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-purple-100 text-purple-900 border border-purple-200 whitespace-nowrap shrink-0">
+                                                                    Turno
+                                                                </span>
+                                                            )}
+                                                            {sancion.tipo_involucrado === 'DIRIGENTE' && (
+                                                                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-sky-100 text-sky-900 border border-sky-200 whitespace-nowrap shrink-0">
+                                                                    Dirigente
+                                                                </span>
+                                                            )}
+                                                            {sanciones.filter(s => s.tipo_sancion !== 'AMONESTACION' && ((s.jugador?.id && sancion.jugador?.id && s.jugador.id === sancion.jugador.id) || (s.jugador?.rut && sancion.jugador?.rut && s.jugador.rut === sancion.jugador.rut))).length > 1 && (
+                                                                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300 shadow-xs inline-flex items-center gap-0.5 whitespace-nowrap shrink-0" title="Jugador Reincidente">
                                                                     ⚡ Reincidente
                                                                 </span>
                                                             )}
                                                         </div>
                                                         <div className="flex items-center mt-0.5 space-x-1.5">
-                                                            {sancion.club.crest ? (
+                                                            {sancion.club?.crest ? (
                                                                 <img
                                                                     src={sancion.club.crest.startsWith('http') || sancion.club.crest.startsWith('/') ? sancion.club.crest : `/storage/${sancion.club.crest}`}
                                                                     alt={sancion.club.name}
-                                                                    className="w-4 h-4 rounded-full object-cover"
+                                                                    className="w-4 h-4 rounded-full object-cover shrink-0"
                                                                     onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }}
                                                                 />
                                                             ) : (
-                                                                <Shield size={12} className="text-slate-400" />
+                                                                <Shield size={12} className="text-slate-400 shrink-0" />
                                                             )}
-                                                            <span className="font-medium text-xs text-slate-500">{sancion.club.name}</span>
+                                                            <span className="font-medium text-xs text-slate-500 truncate">
+                                                                {sancion.club?.name || (sancion.tipo_involucrado === 'TURNO' ? 'Turno de Cancha (Sin club)' : 'Sin club')}
+                                                            </span>
                                                         </div>
                                                     </div>
                                                 </div>
                                             </td>
-                                            <td className="px-6 py-4">
-                                                <div className={`inline-flex items-center px-3 py-1.5 rounded-lg border shadow-sm ${
+                                            <td className="px-4 lg:px-6 py-3.5 whitespace-nowrap">
+                                                <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border shadow-xs whitespace-nowrap ${
                                                     sancion.tipo_sancion === 'PARTIDOS' 
                                                         ? 'bg-red-50 text-red-700 border-red-200' 
-                                                        : 'bg-orange-50 text-orange-700 border-orange-200'
+                                                        : sancion.tipo_sancion === 'AMONESTACION'
+                                                            ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                                            : 'bg-orange-50 text-orange-700 border-orange-200'
                                                 }`}>
-                                                    <span className="mr-2">
-                                                        {sancion.tipo_sancion === 'PARTIDOS' ? <AlertCircle size={16} className="text-red-500" /> : <CalendarClock size={16} className="text-orange-500" />}
-                                                    </span>
-                                                    <span className="font-extrabold text-sm">
-                                                        {sancion.cantidad_sancion} <span className="text-xs font-bold opacity-80 uppercase ml-0.5">{sancion.unidad_tiempo}</span>
+                                                    {sancion.tipo_sancion === 'PARTIDOS'
+                                                        ? <AlertCircle size={15} className="text-red-500 shrink-0" />
+                                                        : sancion.tipo_sancion === 'AMONESTACION'
+                                                            ? <FileText size={15} className="text-amber-600 shrink-0" />
+                                                            : <CalendarClock size={15} className="text-orange-500 shrink-0" />}
+                                                    <span className="font-extrabold text-xs whitespace-nowrap">
+                                                        {sancion.tipo_sancion === 'AMONESTACION' || sancion.unidad_tiempo === 'AMONESTACION' ? (
+                                                            <span className="uppercase">Carta Amonestación</span>
+                                                        ) : (
+                                                            <>{sancion.cantidad_sancion} <span className="font-bold opacity-85 uppercase">{sancion.unidad_tiempo}</span></>
+                                                        )}
                                                     </span>
                                                 </div>
                                             </td>
-                                            <td className="px-6 py-4 text-center">
+                                            <td className="px-4 lg:px-6 py-3.5 text-center whitespace-nowrap">
                                                 {sancion.estado === 'ACTIVO' ? (
-                                                    <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-600 border border-amber-200/60 shadow-sm">
-                                                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mr-1.5 animate-pulse"></span>
+                                                    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200/60 shadow-xs whitespace-nowrap">
+                                                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mr-1.5 animate-pulse shrink-0"></span>
                                                         ACTIVO
                                                     </span>
                                                 ) : (
-                                                    <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-600 border border-emerald-200/60 shadow-sm">
-                                                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5"></span>
+                                                    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200/60 shadow-xs whitespace-nowrap">
+                                                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5 shrink-0"></span>
                                                         CUMPLIDO
                                                     </span>
                                                 )}
                                             </td>
-                                            <td className="px-6 py-4 text-right">
-                                                <div className="flex items-center justify-end space-x-2">
+                                            <td className="px-4 lg:px-6 py-3.5 text-center whitespace-nowrap">
+                                                <a 
+                                                    href={route('tribunal.sanciones.oficio', sancion.id)} 
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-extrabold border transition-all shadow-xs whitespace-nowrap shrink-0 ${
+                                                        sancion.tipo_sancion === 'AMONESTACION' || sancion.unidad_tiempo === 'AMONESTACION'
+                                                            ? 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
+                                                            : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                                                    }`}
+                                                    title={sancion.tipo_sancion === 'AMONESTACION' ? 'Descargar Carta de Amonestación PDF' : 'Descargar Oficio PDF'}
+                                                >
+                                                    <FileDown size={14} className={`shrink-0 ${sancion.tipo_sancion === 'AMONESTACION' ? 'text-amber-600' : 'text-emerald-600'}`} />
+                                                    <span>
+                                                        {sancion.tipo_sancion === 'AMONESTACION' || sancion.unidad_tiempo === 'AMONESTACION'
+                                                            ? 'Carta Amonestación'
+                                                            : 'Oficio PDF'}
+                                                    </span>
+                                                </a>
+                                            </td>
+                                            <td className="px-4 lg:px-6 py-3.5 text-right whitespace-nowrap">
+                                                <div className="inline-flex items-center justify-end gap-1">
                                                     <button 
                                                         onClick={() => setSelectedSancion(sancion)}
-                                                        className="inline-flex items-center justify-center w-8 h-8 rounded-full text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-all"
+                                                        className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-all"
                                                         title="Ver Detalle"
                                                     >
-                                                        <Eye size={18} strokeWidth={2.5} />
+                                                        <Eye size={17} strokeWidth={2.2} />
                                                     </button>
                                                     {canManageSanciones && (
-                                                        <div className="flex items-center space-x-1">
+                                                        <>
                                                             <button 
                                                                 onClick={() => handleEdit(sancion)}
-                                                                className="inline-flex items-center justify-center w-8 h-8 rounded-full text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-all"
+                                                                className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-all"
                                                                 title="Editar Sanción"
                                                             >
-                                                                <Edit2 size={18} strokeWidth={2.5} />
+                                                                <Edit2 size={17} strokeWidth={2.2} />
                                                             </button>
                                                             <button 
                                                                 onClick={() => handleDelete(sancion.id)}
-                                                                className="inline-flex items-center justify-center w-8 h-8 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 transition-all"
+                                                                className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-all"
                                                                 title="Eliminar Sanción"
                                                             >
-                                                                <Trash2 size={18} strokeWidth={2.5} />
+                                                                <Trash2 size={17} strokeWidth={2.2} />
                                                             </button>
-                                                        </div>
+                                                        </>
                                                     )}
-                                                    <a 
-                                                        href={route('tribunal.sanciones.oficio', sancion.id)} 
-                                                        target="_blank"
-                                                        rel="noopener noreferrer"
-                                                        onClick={(e) => e.stopPropagation()}
-                                                        className="inline-flex items-center justify-center w-8 h-8 rounded-full text-slate-400 hover:text-green-600 hover:bg-green-50 transition-all"
-                                                        title="Ver / Descargar Oficio PDF"
-                                                    >
-                                                        <FileDown size={18} strokeWidth={2.5} />
-                                                    </a>
                                                 </div>
                                             </td>
                                         </tr>
@@ -1424,7 +1900,7 @@ export default function TribunalDashboard({
                                     <div>
                                         <h3 className="text-xl font-black text-slate-900 tracking-tight">Detalle de la Infracción</h3>
                                         <p className="text-sm font-medium text-slate-500 mt-1">
-                                            {selectedSancion.jugador?.nombre || 'Sanción al Club'} • {selectedSancion.club.name}
+                                            {selectedSancion.jugador?.nombre || selectedSancion.nombre_involucrado || 'Sanción al Club'} • {selectedSancion.club?.name || 'Turno de Cancha'}
                                         </p>
                                     </div>
                                     <button onClick={() => setSelectedSancion(null)} className="p-1 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100">
@@ -1453,7 +1929,9 @@ export default function TribunalDashboard({
                                     <div className="bg-red-50 p-4 rounded-xl border border-red-100 flex items-center justify-between">
                                         <div className="text-xs font-bold text-red-800 uppercase tracking-wider">Sanción</div>
                                         <div className="font-black text-lg text-red-600">
-                                            {selectedSancion.cantidad_sancion} {selectedSancion.unidad_tiempo.toLowerCase()}
+                                            {selectedSancion.tipo_sancion === 'AMONESTACION' || selectedSancion.unidad_tiempo === 'AMONESTACION'
+                                                ? 'Carta de Amonestación Escrita'
+                                                : `${selectedSancion.cantidad_sancion} ${selectedSancion.unidad_tiempo.toLowerCase()}`}
                                         </div>
                                     </div>
                                 </div>

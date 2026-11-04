@@ -421,8 +421,8 @@ export default function Dashboard({
 
                                 <div className="mt-4">
                                     {/* Gráfico Donut */}
-                                    <div className="h-56 w-full relative flex items-center justify-center">
-                                        <ResponsiveContainer width="100%" height="100%">
+                                    <div className="h-56 w-full min-w-0 relative flex items-center justify-center">
+                                        <ResponsiveContainer width="100%" height={224} minWidth={0}>
                                             <PieChart>
                                                 <Pie
                                                     data={[
@@ -548,7 +548,7 @@ export default function Dashboard({
                                                     </span>
                                                 </div>
                                                 <p className="text-xs text-slate-500 font-medium truncate">
-                                                    {sancion.club?.name} &bull; Sanción: {sancion.cantidad_sancion} {sancion.unidad_tiempo}
+                                                    {sancion.club?.name} &bull; Sanción: {sancion.unidad_tiempo === 'AMONESTACION' ? 'Amonestación Escrita' : `${sancion.cantidad_sancion} ${sancion.unidad_tiempo}`}
                                                 </p>
                                             </div>
 
@@ -605,6 +605,9 @@ export default function Dashboard({
                                                 case 'CITACION':
                                                 case 'CITADO':
                                                     return { label: 'Citado', className: 'bg-blue-50 text-blue-800 border-blue-300' };
+                                                case 'AMONESTACION':
+                                                case 'AMONESTADO':
+                                                    return { label: 'Amonestado', className: 'bg-orange-50 text-orange-800 border-orange-300' };
                                                 case 'RESOLUCION':
                                                 case 'RESUELTO':
                                                     return { label: 'Resuelto', className: 'bg-emerald-50 text-emerald-800 border-emerald-300' };
