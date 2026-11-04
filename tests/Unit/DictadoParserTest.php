@@ -257,6 +257,50 @@ class DictadoParserTest extends TestCase
         $this->assertSame([32, 100, 'Alianza', 'Julio Astete Valenzuela'], [$fondo['numero_fondo'], $fondo['porcentaje'], $fondo['club_texto'], $fondo['jugador_texto']]);
     }
 
+    public function test_leer_el_libro_de_corrido_sin_comas(): void
+    {
+        $clubes = ['union 28 de marzo', 'san carlos', 'carmelo de praga', 'santa rosa', 'santa margarita', 'valencia'];
+        // Cuántas palabras iniciales forman un club (en el sistema lo calcula InterpretadorDictado con los clubes reales)
+        $largoClub = function (string $texto) use ($clubes) {
+            $palabras = explode(' ', DictadoParser::normalizar($texto));
+            for ($k = min(4, count($palabras)); $k >= 1; $k--) {
+                if (in_array(implode(' ', array_slice($palabras, 0, $k)), $clubes, true)) {
+                    return $k;
+                }
+            }
+            return null;
+        };
+        $esClub = fn ($c) => in_array(DictadoParser::normalizar($c), $clubes, true);
+
+        [$modulo, $texto] = DictadoParser::detectarModulo(
+            'Disciplina primera fecha campeonato clausura 2026 domingo 1 de noviembre '
+            . 'Unión 28 de Marzo Gustavo Aguilera Aracena artículo 211 letra N faltas reiteradas 1 partido '
+            . 'San Carlos Ricardo Quiñones Martínez artículo 211 letra P doble amonestación 1 partido '
+            . 'Carmelo de Praga José Castro Aranda artículo 211 letra P doble amonestación '
+            . 'Carmelo de Praga Juan Collao Ponce artículo 211 letra N faltas reiteradas 1+1 partidos R'
+        );
+        $resultado = (new DictadoParser())->parse($texto, $modulo, $esClub, $largoClub);
+
+        $this->assertSame(DictadoParser::DISCIPLINA, $modulo);
+        $this->assertSame([1, '2026-11-01'], [$resultado['contexto']['numero_fecha'], $resultado['contexto']['fecha_resolucion']]);
+        $this->assertSame(
+            [
+                ['Unión 28 de Marzo', 'Gustavo Aguilera Aracena', 'Art. 211 Letra N', 'Faltas reiteradas', 1],
+                ['San Carlos', 'Ricardo Quiñones Martínez', 'Art. 211 Letra P', 'Doble amonestación', 1],
+                ['Carmelo de Praga', 'José Castro Aranda', 'Art. 211 Letra P', 'Doble amonestación', null], // sin cantidad, como en el libro
+                ['Carmelo de Praga', 'Juan Collao Ponce', 'Art. 211 Letra N', 'Faltas reiteradas', 2],
+            ],
+            array_map(fn ($i) => [$i['club_texto'], $i['jugador_texto'], $i['articulo'], $i['tipo_falta'], $i['cantidad']], $resultado['items'])
+        );
+    }
+
+    public function test_encabezado_como_se_escribe_en_el_libro(): void
+    {
+        foreach (['1ª Fecha Campeonato Clausura 2026' => 1, '13ava Fecha Campeonato Local' => 13, 'decimo tercera fecha' => 13, 'segunda fecha clausura' => 2] as $linea => $numero) {
+            $this->assertSame($numero, $this->parse("{$linea}\nValencia, Pedro Pérez, 211 P, doble amonestación, 1 partido")['contexto']['numero_fecha'], $linea);
+        }
+    }
+
     public function test_detectar_modulo_en_la_primera_linea(): void
     {
         $this->assertSame([DictadoParser::ETICA, 'Valencia, Pedro'], DictadoParser::detectarModulo("Ética\nValencia, Pedro"));

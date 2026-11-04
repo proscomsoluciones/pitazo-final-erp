@@ -33,6 +33,15 @@ class DictadoParser
         'diez' => 10, 'once' => 11, 'doce' => 12, 'trece' => 13, 'catorce' => 14, 'quince' => 15,
     ];
 
+    // Como se escribe en el libro: "1ª Fecha", "13ava Fecha", o leído: "primera fecha"
+    private const ORDINALES = [
+        'primera' => 1, 'primer' => 1, 'primero' => 1, 'segunda' => 2, 'tercera' => 3, 'cuarta' => 4,
+        'quinta' => 5, 'sexta' => 6, 'septima' => 7, 'setima' => 7, 'octava' => 8, 'novena' => 9, 'decima' => 10,
+        'undecima' => 11, 'decimo primera' => 11, 'decima primera' => 11, 'decimoprimera' => 11,
+        'duodecima' => 12, 'decimo segunda' => 12, 'decima segunda' => 12, 'decimosegunda' => 12,
+        'decimo tercera' => 13, 'decima tercera' => 13, 'decimotercera' => 13,
+    ];
+
     private const MESES = [
         'enero' => 1, 'febrero' => 2, 'marzo' => 3, 'abril' => 4, 'mayo' => 5, 'junio' => 6, 'julio' => 7,
         'agosto' => 8, 'septiembre' => 9, 'setiembre' => 9, 'octubre' => 10, 'noviembre' => 11, 'diciembre' => 12,
@@ -73,11 +82,18 @@ class DictadoParser
             return [$modulo, trim(implode("\n", array_slice($lineas, 1)))];
         }
 
-        // Dictado en una sola línea: "Disciplina, campeonato oficial 2026, ..."
+        // Dictado en una sola línea: "Disciplina, campeonato ..." o leído sin coma: "Disciplina primera fecha ..."
         [$encabezado, $resto] = array_pad(explode(',', $primera, 2), 2, '');
         if ($modulo = self::ENCABEZADOS[self::normalizar($encabezado)] ?? null) {
             $lineas[0] = trim($resto);
             return [$modulo, trim(implode("\n", $lineas))];
+        }
+        foreach (self::ENCABEZADOS as $nombre => $modulo) {
+            $patron = '/^\s*' . str_replace(['etica', ' '], ['[ée]tica', '\s+'], $nombre) . '\b[\s.:;-]+/iu';
+            if (preg_match($patron, $primera, $m)) {
+                $lineas[0] = trim(substr($primera, strlen($m[0])));
+                return [$modulo, trim(implode("\n", $lineas))];
+            }
         }
 
         return [null, $texto];
@@ -106,6 +122,93 @@ class DictadoParser
     }
 
     /**
+     * Lectura corrida del libro, sin decir "coma":
+     *   "primera fecha campeonato clausura 2026 domingo 1 de noviembre Unión 28 de Marzo Gustavo Aguilera Aracena
+     *    artículo 211 letra N faltas reiteradas 1 partido San Carlos ..."
+     * Se marcan como campos propios lo que tiene forma reconocible (fecha, día, artículo, sanción, RUT, %, días,
+     * montos, multa/nota/fondo) y el texto libre que queda se corta donde empieza un club ($largoClub).
+     */
+    private function insertarComas(string $linea, callable $largoClub): string
+    {
+        [$a, $z] = ['(?<![\p{L}\p{N}])', '(?![\p{L}\p{N}])'];
+        $num = '(?:\d+|' . $this->patronNumeros() . ')';
+        $ordinales = implode('|', array_map(fn ($o) => str_replace(' ', '\s?', $o), array_keys(self::ORDINALES)));
+        $patrones = [
+            // N° de fecha y día
+            "/{$a}(?:fecha\s+(?:\d+|" . $this->patronNumeros() . "|{$ordinales})|\d{1,2}\s*(?:ª|º|a|ava|va|ra|era|da|ta|na|ma)\s+fecha|(?:{$ordinales})\s+fecha){$z}/iu",
+            // (no el "28 de Marzo" de "Unión 28 de Marzo")
+            "/(?<!uni[oó]n\s)(?<!u\.\s)(?<!u\s){$a}\d{1,2}\s+de\s+(?:" . implode('|', array_keys(self::MESES)) . ")(?:\s+del?\s+\d{4})?{$z}/iu",
+            "/{$a}\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4}{$z}/u",
+            // Artículo ("artículo 211 letra N", "211 N", "dos 10 H") y sanción ("1+1 partidos R", "6 meses")
+            "/{$a}(?:art(?:[íi]culo)?\.?\s*)?(?:\d{3}|dos\s+\d{2})\s*(?:letra\s+)?[a-zñ]{$z}/iu",
+            "/{$a}{$num}(?:\s*(?:\+|m[aá]s)\s*{$num})?\s+(?:partidos?|fechas?|mes(?:es)?|a[ñn]os?){$z}(?:\s+(?:r|erre|reincidencia|reincidente){$z})?/iu",
+            // Sanción de amonestación ("doble amonestación" es un motivo, y "carta de amonestación" una nota)
+            "/{$a}amonestaci[oó]n\s+escrita{$z}/iu",
+            // Datos de fondos y multas
+            "/{$a}(?:rut\s*)?\d{1,2}\.?\d{3}\.?\d{3}\s*-\s*[\dk]{$z}/iu",
+            "/{$a}\d{2,3}\s*(?:%|por\s*ciento){$z}/iu",
+            "/{$a}(?:fractura\s*)?\d{1,3}\s+d[ií]a[sz]?{$z}|{$a}fractura{$z}/iu",
+            "/\\$\s*\d{1,3}(?:\.\d{3})+|{$a}\d{1,3}(?:\.\d{3})+(?:\s*pesos)?{$z}/iu",
+            "/{$a}(?:multa|nota|fondo(?:\s+solidario)?(?:\s+n[°º.]?\s*\d+|\s+\d+)?){$z}/iu",
+        ];
+
+        // Tramos reconocidos, sin superposición (gana el que empieza antes y, a igual inicio, el más largo)
+        $tramos = [];
+        foreach ($patrones as $patron) {
+            preg_match_all($patron, $linea, $coincidencias, PREG_OFFSET_CAPTURE);
+            foreach ($coincidencias[0] as [$texto, $inicio]) {
+                $tramos[] = [$inicio, strlen($texto)];
+            }
+        }
+        usort($tramos, fn ($x, $y) => [$x[0], -$x[1]] <=> [$y[0], -$y[1]]);
+
+        $campos = [];
+        $libreDesde = 0;
+        foreach ($tramos as [$inicio, $largo]) {
+            if ($inicio < $libreDesde) {
+                continue;
+            }
+            array_push($campos, ...$this->separarClubes(substr($linea, $libreDesde, $inicio - $libreDesde), $largoClub));
+            $campos[] = trim(substr($linea, $inicio, $largo));
+            $libreDesde = $inicio + $largo;
+        }
+        array_push($campos, ...$this->separarClubes(substr($linea, $libreDesde), $largoClub));
+
+        return implode(', ', $campos);
+    }
+
+    /**
+     * Texto libre -> campos, cortando donde empieza un club: "Unión 28 de Marzo Gustavo Aguilera" -> ["Unión 28 de Marzo", "Gustavo Aguilera"].
+     * Las cartas ("carta de amonestación al Sr. ...") conservan su texto como un solo campo inicial.
+     */
+    private function separarClubes(string $texto, callable $largoClub): array
+    {
+        $palabras = preg_split('/\s+/u', trim($texto, " \t.,;:")) ?: [];
+        $palabras = array_values(array_filter($palabras, fn ($p) => $p !== ''));
+        $campos = [];
+        $actual = [];
+
+        for ($i = 0; $i < count($palabras);) {
+            $k = $largoClub(implode(' ', array_slice($palabras, $i, 6)));
+            if ($k) {
+                if ($actual) {
+                    $campos[] = implode(' ', $actual);
+                    $actual = [];
+                }
+                $campos[] = implode(' ', array_slice($palabras, $i, $k));
+                $i += $k;
+                continue;
+            }
+            $actual[] = $palabras[$i++];
+        }
+        if ($actual) {
+            $campos[] = implode(' ', $actual);
+        }
+
+        return $campos;
+    }
+
+    /**
      * "artículo 211, letra P": la letra dictada como campo aparte se une al artículo.
      */
     private function unirLetraDelArticulo(array $campos): array
@@ -125,15 +228,17 @@ class DictadoParser
     }
 
     /**
-     * @param callable|null $esClub fn(string $campo): bool — permite separar registros dictados en una sola línea
+     * @param callable|null $esClub    fn(string $campo): bool — separa registros dictados en una sola línea
+     * @param callable|null $largoClub fn(string $texto): ?int — cuántas palabras iniciales del texto son un club;
+     *                                 permite leer el libro de corrido, sin comas
      * @return array{contexto: array, items: array<int, array>}
      */
-    public function parse(string $texto, string $modulo = self::DISCIPLINA, ?callable $esClub = null): array
+    public function parse(string $texto, string $modulo = self::DISCIPLINA, ?callable $esClub = null, ?callable $largoClub = null): array
     {
         $contexto = [];
         $items = [];
 
-        foreach ($this->segmentar($texto, $modulo, $esClub ?? fn () => false) as $linea) {
+        foreach ($this->segmentar($texto, $modulo, $esClub ?? fn () => false, $largoClub) as $linea) {
             $norm = self::normalizar($linea);
 
             // "Campeonato oficial 2026, Clausura, fecha 2, 8 de noviembre" o "Fecha 2 Clausura 08-11-2026"
@@ -163,12 +268,17 @@ class DictadoParser
      *
      * @return string[] una línea por registro
      */
-    private function segmentar(string $texto, string $modulo, callable $esClub): array
+    private function segmentar(string $texto, string $modulo, callable $esClub, ?callable $largoClub): array
     {
         $resultado = [];
 
         foreach (preg_split('/\R+/u', self::saltosDictados($texto)) ?: [] as $linea) {
-            $campos = $this->unirLetraDelArticulo($this->campos(trim($this->corregirDictado($linea), " \t.-•*")));
+            $linea = trim($this->corregirDictado($linea), " \t.-•*");
+            // Leído de corrido, sin decir "coma"
+            if ($largoClub && $modulo === self::DISCIPLINA && !str_contains($linea, ',')) {
+                $linea = $this->insertarComas($linea, $largoClub);
+            }
+            $campos = $this->unirLetraDelArticulo($this->campos($linea));
             if (!$campos) {
                 continue;
             }
@@ -203,9 +313,12 @@ class DictadoParser
                 $campo = $campos[$k];
                 $enNota = $actual && ($this->esInicioNota($actual[0]) || str_starts_with(self::normalizar($actual[0]), 'fondo'));
 
-                // Nueva multa/nota/fondo, o un club después de una multa ya completa
+                // Nueva multa/nota/fondo, un club después de una multa ya completa, o un club después del
+                // artículo de una sanción a la que le faltó la cantidad (fila del libro sin "1 partido")
+                $conArticulo = (bool) array_filter($actual, fn ($c) => $this->articulo(self::normalizar($c)));
                 if ($actual && ($this->esInicioNota($campo) || str_starts_with(self::normalizar($campo), 'fondo')
-                        || ($enNota && count($actual) >= 3 && $esClub($campo)))) {
+                        || ($enNota && count($actual) >= 3 && $esClub($campo))
+                        || (!$enNota && $conArticulo && $esClub($campo)))) {
                     $resultado[] = implode(', ', $actual);
                     $actual = [];
                     $enNota = false;
@@ -238,8 +351,33 @@ class DictadoParser
 
     private function esContexto(string $norm): bool
     {
-        return preg_match('/^(campeonato|liguilla|torneo)\b/', $norm) === 1
-            || preg_match('/\bfecha (\d+|' . $this->patronNumeros() . ')\b/', $norm) === 1;
+        return preg_match('/^(campeonato|liguilla|torneo)\b/', $norm) === 1 || $this->numeroDeFecha($norm) !== null;
+    }
+
+    /**
+     * "fecha 2", "fecha dos", "1a fecha" (1ª), "13ava fecha", "primera fecha", "decimo tercera fecha"
+     *
+     * @return array{0: int, 1: string}|null número y texto encontrado
+     */
+    private function numeroDeFecha(string $norm): ?array
+    {
+        $ordinales = implode('|', array_map(fn ($o) => str_replace(' ', '\s?', $o), array_keys(self::ORDINALES)));
+        $patrones = [
+            '/\bfecha (\d+|' . $this->patronNumeros() . '|' . $ordinales . ')\b/',
+            '/\b(\d{1,2})(?:a|ava|va|ra|era|da|ta|na|ma) fecha\b/', // el sufijo distingue "1a fecha" de "1 fecha" (sanción)
+            '/\b(' . $ordinales . ') fecha\b/',
+        ];
+
+        foreach ($patrones as $patron) {
+            if (preg_match($patron, $norm, $m)) {
+                $valor = preg_replace('/\s+/', ' ', $m[1]);
+                $ordinal = self::ORDINALES[$valor] ?? self::ORDINALES[str_replace(' ', '', $valor)] ?? null;
+
+                return [$ordinal ?? $this->numero($valor), $m[0]];
+            }
+        }
+
+        return null;
     }
 
     private function esInicioNota(string $campo): bool
@@ -250,10 +388,10 @@ class DictadoParser
     private function parseContexto(string $linea, string $norm): array
     {
         $contexto = [];
-        $patronFecha = '/\bfecha (\d+|' . $this->patronNumeros() . ')\b/';
+        $numeroFecha = $this->numeroDeFecha($norm);
 
-        if (preg_match($patronFecha, $norm, $m)) {
-            $contexto['numero_fecha'] = $this->numero($m[1]);
+        if ($numeroFecha) {
+            $contexto['numero_fecha'] = $numeroFecha[0];
         }
         if ($fecha = $this->fecha($linea)) {
             $contexto['fecha_resolucion'] = $fecha;
@@ -262,7 +400,10 @@ class DictadoParser
         // Lo que queda (campeonato y/o fase) se busca después en la base
         $resto = self::normalizar(preg_replace('/\b\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4}\b/', ' ', $linea));
         $resto = preg_replace('/\b\d{1,2} de (' . implode('|', array_keys(self::MESES)) . ')( del? \d{4})?\b/', ' ', $resto);
-        $resto = trim(preg_replace([$patronFecha, '/\s+/'], ['', ' '], $resto));
+        if ($numeroFecha) {
+            $resto = str_replace($numeroFecha[1], ' ', $resto);
+        }
+        $resto = trim(preg_replace('/\s+/', ' ', $resto));
         if ($resto !== '') {
             $contexto['torneo_texto'] = $resto;
         }

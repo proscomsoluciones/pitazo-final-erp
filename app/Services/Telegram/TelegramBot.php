@@ -442,7 +442,7 @@ class TelegramBot
             '',
             $this->formato(DictadoParser::ETICA),
             '',
-            '• Al dictar, di «coma» entre datos y «nueva línea» entre registros.',
+            '• En disciplina puedes leer el libro tal cual, sin decir «coma»: «Primera fecha campeonato Clausura 2026 domingo 1 de noviembre, Unión 28 de Marzo Gustavo Aguilera Aracena artículo 211 letra N faltas reiteradas 1 partido, San Carlos…»',
             '• Nada se registra hasta aprobar: con el botón ✅ Aprobar (pide confirmación) o en el sistema.',
             '',
             '/disciplina o /etica — ver solo ese formato',
@@ -472,7 +472,7 @@ class TelegramBot
                 'Multa, Valencia, 50.000, no presentación serie femenina',
                 'Carta de amonestación al Sr. Oscar Girola DT, Santa Margarita, mal comportamiento, 10.000',
                 'Fondo 32, Alianza, Julio Astete Valenzuela, 13.262.615-4, 14 días</code>',
-                '• Primera línea: campeonato, fase, N° de fecha y día (también «Fecha 2 Clausura 08-11-2026»).',
+                '• Primera línea: campeonato, fase, N° de fecha y día («1ª Fecha Campeonato Clausura 2026, domingo 1 de noviembre»).',
                 '• R marca reincidencia: «1 partido, R» o «1+1 partidos» quedan en 2.',
                 '• Fondo: indica % (100%) o días de reposo (14 días, fractura).',
             ]);

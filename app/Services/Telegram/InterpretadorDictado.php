@@ -42,7 +42,12 @@ class InterpretadorDictado
     public function interpretar(string $texto, string $modulo = DictadoParser::DISCIPLINA): array
     {
         // Con el club se separan los registros cuando el dictado llega en una sola línea
-        $resultado = $this->parser->parse($texto, $modulo, fn (string $campo) => (bool) $this->buscarClub($campo, 90));
+        $resultado = $this->parser->parse(
+            $texto,
+            $modulo,
+            fn (string $campo) => (bool) $this->buscarClub($campo, 90),
+            fn (string $texto) => $this->largoClub($texto),
+        );
 
         $contexto = $resultado['contexto'] + ['avisos' => []];
         if (!empty($contexto['torneo_texto'])) {
@@ -248,6 +253,45 @@ class InterpretadorDictado
         return $item;
     }
 
+    /**
+     * Cuántas palabras del inicio del texto forman el nombre de un club (para leer el libro sin comas):
+     * "Unión 28 de Marzo Gustavo Aguilera" -> 4, "Estrella Kevin Núñez" -> 1, "Gustavo Aguilera" -> null.
+     * Acepta el nombre completo, su comienzo ("Estrella", "Carmelo"), su final ("Compuertas", "28 de Marzo")
+     * o un error leve de dictado ("Palencia").
+     */
+    public function largoClub(string $texto): ?int
+    {
+        $palabras = preg_split('/\s+/u', trim($texto)) ?: [];
+        $this->cargarClubes();
+        $largo = null;
+
+        for ($k = 1; $k <= min(6, count($palabras)); $k++) {
+            $prefijo = str_replace(' ', '', $this->normalizarClub(implode(' ', array_slice($palabras, 0, $k))));
+            if (strlen($prefijo) < 4) {
+                continue;
+            }
+
+            foreach ($this->clubes as ['norm' => $norm]) {
+                $club = str_replace(' ', '', $norm);
+                $coincide = $prefijo === $club
+                    || str_starts_with($club, $prefijo)
+                    || (strlen($prefijo) >= 7 && str_ends_with($club, $prefijo))
+                    || (strlen($prefijo) >= 6 && abs(strlen($prefijo) - strlen($club)) <= 2 && $this->similitud($prefijo, $club) >= 85);
+                if ($coincide) {
+                    $largo = $k;
+                    break;
+                }
+            }
+        }
+
+        return $largo;
+    }
+
+    private function cargarClubes(): void
+    {
+        $this->clubes ??= Club::all()->map(fn (Club $c) => ['club' => $c, 'norm' => $this->normalizarClub($c->name)]);
+    }
+
     public function buscarClub(string $texto, float $minimo = 75): ?Club
     {
         $buscado = $this->normalizarClub($texto);
@@ -255,7 +299,7 @@ class InterpretadorDictado
             return null;
         }
 
-        $this->clubes ??= Club::all()->map(fn (Club $c) => ['club' => $c, 'norm' => $this->normalizarClub($c->name)]);
+        $this->cargarClubes();
 
         $compacto = str_replace(' ', '', $buscado);
         $mejor = null;
