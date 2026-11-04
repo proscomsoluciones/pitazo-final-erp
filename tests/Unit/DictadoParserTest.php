@@ -195,6 +195,36 @@ class DictadoParserTest extends TestCase
         $this->assertNotEmpty($items[1]['avisos']);
     }
 
+    public function test_dictado_real_en_una_sola_linea(): void
+    {
+        // Así llegó desde el teclado del celular: sin saltos, "2026" partido y comas de más en el nombre
+        $texto = 'Disciplina, campeonato oficial 20, 26, clausura, fecha dos, 8 de noviembre, Santa Rosa, Javier, Vera Llano, 211 P, doble mutación, un partido';
+        [$modulo, $resto] = DictadoParser::detectarModulo($texto);
+        $resultado = (new DictadoParser())->parse($resto, $modulo, fn ($c) => in_array($c, ['Santa Rosa', 'Carmelo de Praga'], true));
+
+        $this->assertSame(DictadoParser::DISCIPLINA, $modulo);
+        $this->assertSame([2, '2026-11-08', 'campeonato oficial 2026 clausura'], [
+            $resultado['contexto']['numero_fecha'], $resultado['contexto']['fecha_resolucion'], $resultado['contexto']['torneo_texto'],
+        ]);
+        $this->assertCount(1, $resultado['items']);
+        $item = $resultado['items'][0];
+        $this->assertSame(['Santa Rosa', 'Javier Vera Llano', 'Art. 211 Letra P', 'Doble mutación', 1], [
+            $item['club_texto'], $item['jugador_texto'], $item['articulo'], $item['tipo_falta'], $item['cantidad'],
+        ]);
+    }
+
+    public function test_varias_sanciones_multa_y_fondo_en_una_sola_linea(): void
+    {
+        $texto = 'Santa Rosa, Javier Vera Llano, 211 P, doble amonestación, un partido, Carmelo de Praga, Juan Collao Ponce, 211 N, faltas reiteradas, un partido, R, '
+            . 'Multa, Valencia, 50.000, no presentación serie femenina, Fondo, Alianza, Julio Astete, 13.262.615-4, 14 días';
+        $items = (new DictadoParser())->parse($texto, DictadoParser::DISCIPLINA, fn ($c) => in_array($c, ['Santa Rosa', 'Carmelo de Praga', 'Valencia', 'Alianza'], true))['items'];
+
+        $this->assertSame(['SANCION', 'SANCION', 'NOTA', 'FONDO'], array_column($items, 'tipo'));
+        $this->assertSame([2, true], [$items[1]['cantidad'], $items[1]['reincidencia']]);
+        $this->assertSame(['Valencia', 50000], [$items[2]['club_texto'], $items[2]['monto']]);
+        $this->assertSame(['Alianza', 100], [$items[3]['club_texto'], $items[3]['porcentaje']]);
+    }
+
     public function test_detectar_modulo_en_la_primera_linea(): void
     {
         $this->assertSame([DictadoParser::ETICA, 'Valencia, Pedro'], DictadoParser::detectarModulo("Ética\nValencia, Pedro"));

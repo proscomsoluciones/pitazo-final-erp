@@ -41,7 +41,8 @@ class InterpretadorDictado
      */
     public function interpretar(string $texto, string $modulo = DictadoParser::DISCIPLINA): array
     {
-        $resultado = $this->parser->parse($texto, $modulo);
+        // Con el club se separan los registros cuando el dictado llega en una sola línea
+        $resultado = $this->parser->parse($texto, $modulo, fn (string $campo) => (bool) $this->buscarClub($campo, 90));
 
         $contexto = $resultado['contexto'] + ['avisos' => []];
         if (!empty($contexto['torneo_texto'])) {
@@ -96,14 +97,44 @@ class InterpretadorDictado
             $item['avisos'][] = "Tiene {$item['sanciones_previas']} sanción(es) previa(s) y no se marcó R.";
         }
 
-        if (!$item['tipo_falta'] && $item['articulo']) {
-            $item['tipo_falta'] = $this->motivoHabitual($item['articulo']);
-            $item['avisos'][] = $item['tipo_falta']
-                ? "Motivo completado según el artículo: \"{$item['tipo_falta']}\"."
-                : 'Falta el motivo de la sanción.';
+        if ($item['articulo']) {
+            $motivos = $this->motivosDelArticulo($item['articulo']);
+
+            if (!$item['tipo_falta']) {
+                $item['tipo_falta'] = $motivos[0] ?? null;
+                $item['avisos'][] = $item['tipo_falta']
+                    ? "Motivo completado según el artículo: \"{$item['tipo_falta']}\"."
+                    : 'Falta el motivo de la sanción.';
+            } elseif ($corregido = $this->corregirMotivo($item['tipo_falta'], $motivos)) {
+                // Errores típicos del dictado: "doble mutación" -> "Doble amonestación"
+                $item['avisos'][] = "Motivo corregido: \"{$item['tipo_falta']}\" → \"{$corregido}\".";
+                $item['tipo_falta'] = $corregido;
+            }
         }
 
         return $item;
+    }
+
+    /**
+     * Motivo conocido del artículo parecido al dictado (≥ 78 %), o null si coincide con uno o no se parece a ninguno.
+     */
+    private function corregirMotivo(string $dictado, array $motivos): ?string
+    {
+        $buscado = DictadoParser::normalizar($dictado);
+        $mejor = null;
+        $mejorPuntaje = 0;
+
+        foreach ($motivos as $motivo) {
+            $norm = DictadoParser::normalizar($motivo);
+            if ($norm === $buscado) {
+                return null;
+            }
+            if (($puntaje = $this->similitud($buscado, $norm)) > $mejorPuntaje) {
+                [$mejor, $mejorPuntaje] = [$motivo, $puntaje];
+            }
+        }
+
+        return $mejorPuntaje >= 78 ? $mejor : null;
     }
 
     private function resolverNota(array $item): array
@@ -237,7 +268,8 @@ class InterpretadorDictado
             }
 
             // "Estrella" -> "Estrella de Chile", "28 de Marzo" -> "Unión 28 de Marzo"
-            $puntaje = str_contains($normCompacto, $compacto) || str_contains($compacto, $normCompacto)
+            // (mínimo 4 letras: "R" o "2" no deben coincidir con "Unión 28 de Marzo")
+            $puntaje = strlen($compacto) >= 4 && (str_contains($normCompacto, $compacto) || str_contains($compacto, $normCompacto))
                 ? 90
                 : $this->similitud($compacto, $normCompacto);
 
@@ -295,16 +327,24 @@ class InterpretadorDictado
             ->first(fn (Jugador $j) => DictadoParser::normalizar($j->nombre) === $buscado);
     }
 
-    private function motivoHabitual(string $articulo): ?string
+    /**
+     * Motivos ya usados con el artículo, del más frecuente al menos frecuente.
+     *
+     * @return string[]
+     */
+    private function motivosDelArticulo(string $articulo): array
     {
-        $motivo = Sancion::where('articulo_reglamento', $articulo)
+        return Sancion::where('articulo_reglamento', $articulo)
             ->selectRaw('tipo_falta, count(*) as total')
             ->groupBy('tipo_falta')
             ->orderByDesc('total')
-            ->value('tipo_falta');
-
-        // Quitar el detalle de reincidencia: "Faltas reiteradas (1 partido + 1 ...)"
-        return $motivo ? trim(preg_replace('/\s*\(.*\)\s*$/', '', $motivo)) : null;
+            ->pluck('tipo_falta')
+            // Quitar el detalle de reincidencia: "Faltas reiteradas (1 partido + 1 ...)"
+            ->map(fn ($m) => trim(preg_replace('/\s*\(.*\)\s*$/', '', $m)))
+            ->filter()
+            ->unique(fn ($m) => DictadoParser::normalizar($m))
+            ->values()
+            ->all();
     }
 
     /**

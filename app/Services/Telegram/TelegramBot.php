@@ -150,6 +150,7 @@ class TelegramBot
             'telegram_usuario' => trim(($from['first_name'] ?? '') . ' ' . ($from['last_name'] ?? '')) ?: ($from['username'] ?? null),
             'texto_original' => $texto,
             'modulo' => $modulo,
+            'estado' => 'PENDIENTE',
             'items' => $items,
             'campeonato_id' => $contexto['campeonato_id'] ?? null,
             'fase_id' => $contexto['fase_id'] ?? null,

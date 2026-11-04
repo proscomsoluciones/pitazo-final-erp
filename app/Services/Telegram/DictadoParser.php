@@ -67,29 +67,36 @@ class DictadoParser
     public static function detectarModulo(string $texto): array
     {
         $lineas = preg_split('/\R/u', trim($texto)) ?: [];
-        $modulo = self::ENCABEZADOS[self::normalizar($lineas[0] ?? '')] ?? null;
+        $primera = $lineas[0] ?? '';
 
-        return $modulo ? [$modulo, trim(implode("\n", array_slice($lineas, 1)))] : [null, $texto];
+        if ($modulo = self::ENCABEZADOS[self::normalizar($primera)] ?? null) {
+            return [$modulo, trim(implode("\n", array_slice($lineas, 1)))];
+        }
+
+        // Dictado en una sola línea: "Disciplina, campeonato oficial 2026, ..."
+        [$encabezado, $resto] = array_pad(explode(',', $primera, 2), 2, '');
+        if ($modulo = self::ENCABEZADOS[self::normalizar($encabezado)] ?? null) {
+            $lineas[0] = trim($resto);
+            return [$modulo, trim(implode("\n", $lineas))];
+        }
+
+        return [null, $texto];
     }
 
     /**
+     * @param callable|null $esClub fn(string $campo): bool — permite separar registros dictados en una sola línea
      * @return array{contexto: array, items: array<int, array>}
      */
-    public function parse(string $texto, string $modulo = self::DISCIPLINA): array
+    public function parse(string $texto, string $modulo = self::DISCIPLINA, ?callable $esClub = null): array
     {
         $contexto = [];
         $items = [];
 
-        foreach (preg_split('/\R+/u', $texto) ?: [] as $linea) {
-            $linea = trim($linea, " \t.-•*");
-            if ($linea === '') {
-                continue;
-            }
-
+        foreach ($this->segmentar($texto, $modulo, $esClub ?? fn () => false) as $linea) {
             $norm = self::normalizar($linea);
 
             // "Campeonato oficial 2026, Clausura, fecha 2, 8 de noviembre" o "Fecha 2 Clausura 08-11-2026"
-            if (preg_match('/^(campeonato|liguilla|torneo)\b/', $norm) || preg_match('/\bfecha (\d+|' . $this->patronNumeros() . ')\b/', $norm)) {
+            if ($this->esContexto($norm)) {
                 $contexto = array_merge($contexto, $this->parseContexto($linea, $norm));
                 continue;
             }
@@ -106,6 +113,99 @@ class DictadoParser
         }
 
         return ['contexto' => $contexto, 'items' => $items];
+    }
+
+    /**
+     * El dictado del celular suele llegar en una sola línea. Se separa en:
+     *  - el contexto del inicio (campeonato, fase, "fecha N", día), hasta el primer club;
+     *  - un registro por sanción: termina en "1 partido" (más la R si viene), o antes de "Multa/Nota/Carta/Fondo".
+     *
+     * @return string[] una línea por registro
+     */
+    private function segmentar(string $texto, string $modulo, callable $esClub): array
+    {
+        $resultado = [];
+
+        foreach (preg_split('/\R+/u', $texto) ?: [] as $linea) {
+            // "2026" dictado como "20, 26"
+            $linea = preg_replace('/\b(20),?\s+(\d{2})\b/', '$1$2', $linea);
+            $campos = $this->campos(trim($linea, " \t.-•*"));
+            if (!$campos) {
+                continue;
+            }
+
+            $iContexto = null;
+            foreach ($campos as $i => $campo) {
+                if ($this->esContexto(self::normalizar($campo))) {
+                    $iContexto = $i;
+                }
+            }
+            if ($iContexto !== null) {
+                $fin = count($campos);
+                for ($j = $iContexto + 1; $j < count($campos); $j++) {
+                    if ($this->esInicioNota($campos[$j]) || ($esClub($campos[$j]) && !$this->esContexto(self::normalizar($campos[$j])))) {
+                        $fin = $j;
+                        break;
+                    }
+                }
+                $resultado[] = implode(', ', array_slice($campos, 0, $fin));
+                $campos = array_slice($campos, $fin);
+            }
+
+            if ($modulo === self::ETICA) {
+                if ($campos) {
+                    $resultado[] = implode(', ', $campos);
+                }
+                continue;
+            }
+
+            $actual = [];
+            for ($k = 0; $k < count($campos); $k++) {
+                $campo = $campos[$k];
+                $enNota = $actual && ($this->esInicioNota($actual[0]) || str_starts_with(self::normalizar($actual[0]), 'fondo'));
+
+                // Nueva multa/nota/fondo, o un club después de una multa ya completa
+                if ($actual && ($this->esInicioNota($campo) || str_starts_with(self::normalizar($campo), 'fondo')
+                        || ($enNota && count($actual) >= 3 && $esClub($campo)))) {
+                    $resultado[] = implode(', ', $actual);
+                    $actual = [];
+                    $enNota = false;
+                }
+
+                $actual[] = $campo;
+
+                if (!$enNota && !$this->esInicioNota($actual[0]) && $this->sancion(self::normalizar($campo, '+'))) {
+                    // La R, o el artículo si se dijo después de la sanción, siguen siendo parte de este registro
+                    while (isset($campos[$k + 1])) {
+                        $siguiente = self::normalizar($campos[$k + 1]);
+                        $tieneArticulo = (bool) array_filter($actual, fn ($c) => $this->articulo(self::normalizar($c)));
+                        if (!in_array($siguiente, ['r', 'reincidencia', 'reincidente', 'reincide'], true)
+                            && ($tieneArticulo || !$this->articulo($siguiente))) {
+                            break;
+                        }
+                        $actual[] = $campos[++$k];
+                    }
+                    $resultado[] = implode(', ', $actual);
+                    $actual = [];
+                }
+            }
+            if ($actual) {
+                $resultado[] = implode(', ', $actual);
+            }
+        }
+
+        return $resultado;
+    }
+
+    private function esContexto(string $norm): bool
+    {
+        return preg_match('/^(campeonato|liguilla|torneo)\b/', $norm) === 1
+            || preg_match('/\bfecha (\d+|' . $this->patronNumeros() . ')\b/', $norm) === 1;
+    }
+
+    private function esInicioNota(string $campo): bool
+    {
+        return preg_match('/^(multa|nota|carta)\b/', self::normalizar($campo)) === 1;
     }
 
     private function parseContexto(string $linea, string $norm): array
@@ -263,7 +363,9 @@ class DictadoParser
             'avisos' => [],
         ];
 
-        $resto = [];
+        // Campos libres antes y después del artículo
+        $antes = [];
+        $despues = [];
         foreach ($this->campos($linea) as $campo) {
             $norm = self::normalizar($campo, '+');
 
@@ -282,12 +384,24 @@ class DictadoParser
                 continue;
             }
 
-            $resto[] = $campo;
+            if ($item['articulo'] === null) {
+                $antes[] = $campo;
+            } else {
+                $despues[] = $campo;
+            }
         }
 
-        $item['club_texto'] = $resto[0] ?? null;
-        $item['jugador_texto'] = $resto[1] ?? null;
-        $item['tipo_falta'] = count($resto) > 2 ? Str::ucfirst(implode(', ', array_slice($resto, 2))) : null;
+        if ($item['articulo'] !== null && count($antes) >= 2) {
+            // club, jugador (aunque el dictado le haya puesto comas: "Javier, Vera Llano"), artículo, motivo
+            $item['club_texto'] = $antes[0];
+            $item['jugador_texto'] = implode(' ', array_slice($antes, 1));
+            $item['tipo_falta'] = Str::ucfirst(implode(', ', $despues)) ?: null;
+        } else {
+            $resto = array_merge($antes, $despues);
+            $item['club_texto'] = $resto[0] ?? null;
+            $item['jugador_texto'] = $resto[1] ?? null;
+            $item['tipo_falta'] = count($resto) > 2 ? Str::ucfirst(implode(', ', array_slice($resto, 2))) : null;
+        }
 
         // "1+1" ya trae el agravante; "1 partido, R" suma el +1 de la reincidencia
         if ($item['reincidencia'] && $item['unidad'] === 'PARTIDOS' && $item['cantidad'] === $item['cantidad_base']) {
