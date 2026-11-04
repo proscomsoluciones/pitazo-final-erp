@@ -14,6 +14,7 @@ class TelegramBorrador extends Model
         'telegram_user_id',
         'telegram_usuario',
         'texto_original',
+        'modulo',
         'items',
         'campeonato_id',
         'fase_id',

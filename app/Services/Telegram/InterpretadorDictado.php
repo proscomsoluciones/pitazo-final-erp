@@ -2,19 +2,33 @@
 
 namespace App\Services\Telegram;
 
+use App\Helpers\RutHelper;
 use App\Models\Club;
 use App\Models\Fase;
+use App\Models\FondoSolidario;
 use App\Models\Jugador;
 use App\Models\Sancion;
+use Carbon\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 
 /**
  * Cruza lo interpretado por DictadoParser con la base: club, jugador existente,
- * sanciones previas (reincidencia), motivo habitual del artículo y fase.
+ * sanciones previas (reincidencia), motivo habitual del artículo, fase y fondos.
  */
 class InterpretadorDictado
 {
     private const ABREVIATURAS = ['sta' => 'santa', 'sto' => 'santo', 'u' => 'union', 'cd' => '', 'club' => ''];
+
+    // Referencia (REF) sugerida para el oficio de ética según la medida
+    private const ASUNTOS = [
+        'EN_INVESTIGACION' => 'Apertura de Investigación',
+        'CITADO' => 'Citación a Sesión Oficial',
+        'INHABILITADO' => 'Inhabilitación',
+        'AMONESTADO' => 'Amonestación',
+        'RESUELTO' => 'Comunica Resolución',
+        'ARCHIVADO' => 'Comunica Resolución',
+    ];
 
     private ?Collection $clubes = null;
 
@@ -25,9 +39,9 @@ class InterpretadorDictado
     /**
      * @return array{contexto: array, items: array<int, array>}
      */
-    public function interpretar(string $texto): array
+    public function interpretar(string $texto, string $modulo = DictadoParser::DISCIPLINA): array
     {
-        $resultado = $this->parser->parse($texto);
+        $resultado = $this->parser->parse($texto, $modulo);
 
         $contexto = $resultado['contexto'];
         if (!empty($contexto['fase_texto'])) {
@@ -39,6 +53,8 @@ class InterpretadorDictado
         $items = array_map(fn (array $item) => match ($item['tipo']) {
             'SANCION' => $this->resolverSancion($item),
             'NOTA' => $this->resolverNota($item),
+            'FONDO' => $this->resolverFondo($item),
+            'EXPEDIENTE' => $this->resolverExpediente($item, $contexto['fecha_resolucion'] ?? now()->toDateString()),
             default => $item,
         }, $resultado['items']);
 
@@ -95,8 +111,18 @@ class InterpretadorDictado
     private function resolverNota(array $item): array
     {
         $club = $item['club_texto'] ? $this->buscarClub($item['club_texto']) : null;
+
+        // Cartas: el club es el primer campo que coincide con un club; se quita del texto de la nota
+        foreach ($item['candidatos_club'] ?? [] as $candidato) {
+            if ($club = $this->buscarClub($candidato, 90)) {
+                $item['nota'] = trim(str_replace(", {$candidato}", '', $item['nota']));
+                break;
+            }
+        }
+
         $item['club_id'] = $club?->id;
         $item['club_nombre'] = $club?->name;
+        unset($item['candidatos_club']);
 
         if ($item['club_texto'] && !$club) {
             $item['avisos'][] = "No se encontró el club \"{$item['club_texto']}\"; la nota quedará sin club.";
@@ -105,7 +131,95 @@ class InterpretadorDictado
         return $item;
     }
 
-    public function buscarClub(string $texto): ?Club
+    private function resolverFondo(array $item): array
+    {
+        $club = $item['club_texto'] ? $this->buscarClub($item['club_texto']) : null;
+        $item['club_id'] = $club?->id;
+        $item['club_nombre'] = $club?->name;
+        $item['jugador_nombre'] = $item['jugador_texto'] ? $this->capitalizar($item['jugador_texto']) : null;
+        $item['estado'] = 'PAGADO';
+
+        if ($item['club_texto'] && !$club) {
+            $item['avisos'][] = "No se encontró el club \"{$item['club_texto']}\".";
+        }
+
+        if ($item['numero_fondo'] && FondoSolidario::where('numero_fondo', $item['numero_fondo'])->exists()) {
+            $item['avisos'][] = "Ya existe el Fondo Solidario N°{$item['numero_fondo']}.";
+        } elseif (!$item['numero_fondo']) {
+            $item['avisos'][] = 'Sin N° de fondo: se asignará el siguiente al aprobar.';
+        }
+
+        return $item;
+    }
+
+    private function resolverExpediente(array $item, string $fechaBase): array
+    {
+        $textos = $item['textos'];
+        // Umbral más alto: un turno sin club no debe confundirse con un club ("Margarita..." / "Santa Margarita")
+        $club = isset($textos[0]) ? $this->buscarClub($textos[0], 85) : null;
+        if ($club) {
+            array_shift($textos);
+        }
+
+        $item['club_id'] = $club?->id;
+        $item['club_nombre'] = $club?->name;
+        $item['calidad'] ??= 'JUGADOR';
+        $item['jugador_id'] = null;
+        $item['nombre'] = $item['calidad'] === 'CLUB' ? $club?->name : ($textos ? $this->capitalizar(array_shift($textos)) : null);
+        $detalle = Str::ucfirst(implode(', ', $textos)) ?: null;
+
+        if ($item['calidad'] === 'JUGADOR' && $club && $item['nombre']) {
+            [$jugador, $aviso] = $this->buscarJugador($item['nombre'], $club->id);
+            if ($jugador) {
+                $item['jugador_id'] = $jugador->id;
+                $item['nombre'] = $jugador->nombre;
+                if (!$item['rut'] && $jugador->rut && !RutHelper::esPendiente($jugador->rut)) {
+                    $item['rut'] = RutHelper::format($jugador->rut);
+                }
+            }
+            if ($aviso) {
+                $item['avisos'][] = $aviso;
+            }
+        }
+
+        if (!$club && in_array($item['calidad'], ['JUGADOR', 'CLUB'], true)) {
+            $item['avisos'][] = 'No se reconoció el club (primer campo).';
+        }
+        if (!$item['rut'] && in_array($item['calidad'], ['JUGADOR', 'DIRIGENTE', 'TURNO'], true)) {
+            $item['avisos'][] = 'Sin RUT: el oficio dirá "No registrado".';
+        }
+
+        // Resolución y archivo usan el texto como lo resuelto; el resto, como antecedentes
+        $esResolucion = in_array($item['estado'], ['RESUELTO', 'ARCHIVADO'], true);
+        $item['descripcion'] = $esResolucion ? null : $detalle;
+        $item['detalles_resolucion'] = $esResolucion ? $detalle : null;
+        $item['asunto'] = self::ASUNTOS[$item['estado']];
+
+        $item['fecha_inicio_inhabilitacion'] = null;
+        $item['fecha_fin_inhabilitacion'] = null;
+        if ($item['estado'] === 'INHABILITADO') {
+            $inicio = Carbon::parse($item['desde'] ?? $fechaBase);
+            $item['fecha_inicio_inhabilitacion'] = $inicio->toDateString();
+            $item['fecha_fin_inhabilitacion'] = $item['hasta'] ?? ($item['duracion']
+                ? ($item['duracion']['unidad'] === 'AÑOS' ? $inicio->copy()->addYears($item['duracion']['cantidad']) : $inicio->copy()->addMonths($item['duracion']['cantidad']))->toDateString()
+                : null);
+            if (!$item['fecha_fin_inhabilitacion']) {
+                $item['avisos'][] = 'Inhabilitación sin término (indica duración o "hasta dd-mm-aaaa").';
+            }
+        }
+        if ($item['estado'] === 'CITADO') {
+            $item['lugar_citacion'] = 'Sede Oficial de la Asociación';
+            if (!$item['fecha_citacion']) {
+                $item['avisos'][] = 'Citación sin fecha: indícala al aprobar.';
+            }
+        }
+
+        unset($item['textos'], $item['desde'], $item['hasta'], $item['duracion']);
+
+        return $item;
+    }
+
+    public function buscarClub(string $texto, float $minimo = 75): ?Club
     {
         $buscado = $this->normalizarClub($texto);
         if ($buscado === '') {
@@ -134,7 +248,7 @@ class InterpretadorDictado
             }
         }
 
-        return $mejorPuntaje >= 75 ? $mejor : null;
+        return $mejorPuntaje >= $minimo ? $mejor : null;
     }
 
     /**

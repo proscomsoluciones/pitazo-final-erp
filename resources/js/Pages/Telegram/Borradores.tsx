@@ -5,6 +5,7 @@ import { Send, CheckCircle2, XCircle, Clock, AlertTriangle, ChevronRight } from 
 interface Borrador {
     id: number;
     telegram_usuario: string | null;
+    modulo: 'DISCIPLINA' | 'ETICA';
     items: { tipo: string; avisos?: string[] }[];
     estado: 'PENDIENTE' | 'APROBADO' | 'DESCARTADO';
     numero_fecha: number | null;
@@ -36,7 +37,7 @@ export default function Borradores({ borradores, botConfigurado }: { borradores:
                     </div>
                     <div>
                         <h2 className="text-2xl font-bold tracking-tight text-slate-900">Borradores de Telegram</h2>
-                        <p className="text-xs text-slate-500 font-medium">Sanciones y multas dictadas al bot, pendientes de revisión</p>
+                        <p className="text-xs text-slate-500 font-medium">Registros de disciplina y ética dictados al bot, pendientes de revisión</p>
                     </div>
                 </div>
             }
@@ -62,7 +63,7 @@ export default function Borradores({ borradores, botConfigurado }: { borradores:
                             <h3 className="text-lg font-bold text-slate-800">Recibidos</h3>
                             <p className="text-sm text-slate-500">
                                 {pendientes > 0 ? `${pendientes} pendiente(s) de aprobar.` : 'No hay borradores pendientes.'}
-                                {' '}Nada se registra en el Tribunal hasta aprobar el borrador.
+                                {' '}Nada se registra en el sistema hasta aprobar el borrador.
                             </p>
                         </div>
 
@@ -86,6 +87,11 @@ export default function Borradores({ borradores, botConfigurado }: { borradores:
                                                 <div className="min-w-0 flex-1">
                                                     <div className="flex flex-wrap items-center gap-2">
                                                         <span className="font-black text-slate-900">Borrador #{b.id}</span>
+                                                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-black ${
+                                                            b.modulo === 'ETICA' ? 'bg-indigo-100 text-indigo-800' : 'bg-sky-100 text-sky-800'
+                                                        }`}>
+                                                            {b.modulo === 'ETICA' ? 'Ética' : 'Disciplina'}
+                                                        </span>
                                                         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-black ${estado.clase}`}>
                                                             <Icono size={12} /> {estado.label}
                                                         </span>

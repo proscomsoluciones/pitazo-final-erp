@@ -61,22 +61,11 @@ class EticaController extends Controller
             'observaciones'              => 'nullable|string',
         ]);
 
-        // Generar folio único ETICA-YYYY-0000X
-        $year = now()->year;
-        $count = CasoEtica::whereYear('created_at', $year)->count() + 1;
-        $data['folio'] = sprintf('ETICA-%s-%05d', $year, $count);
+        $data['folio'] = CasoEtica::siguienteFolio();
 
         // Sincronizar tipo_oficio según estado
-        $mapEstadoTipo = [
-            'EN_INVESTIGACION' => 'INVESTIGACION',
-            'CITADO'           => 'CITACION',
-            'INHABILITADO'     => 'INHABILITACION',
-            'AMONESTADO'       => 'AMONESTACION',
-            'RESUELTO'         => 'RESOLUCION',
-            'ARCHIVADO'        => 'RESOLUCION',
-        ];
-        if (isset($data['estado']) && isset($mapEstadoTipo[$data['estado']])) {
-            $data['tipo_oficio'] = $mapEstadoTipo[$data['estado']];
+        if (isset(CasoEtica::TIPO_OFICIO_POR_ESTADO[$data['estado']])) {
+            $data['tipo_oficio'] = CasoEtica::TIPO_OFICIO_POR_ESTADO[$data['estado']];
         }
 
         $caso = CasoEtica::create($data);
@@ -113,16 +102,8 @@ class EticaController extends Controller
         ]);
 
         // Sincronizar tipo_oficio según estado
-        $mapEstadoTipo = [
-            'EN_INVESTIGACION' => 'INVESTIGACION',
-            'CITADO'           => 'CITACION',
-            'INHABILITADO'     => 'INHABILITACION',
-            'AMONESTADO'       => 'AMONESTACION',
-            'RESUELTO'         => 'RESOLUCION',
-            'ARCHIVADO'        => 'RESOLUCION',
-        ];
-        if (isset($data['estado']) && isset($mapEstadoTipo[$data['estado']])) {
-            $data['tipo_oficio'] = $mapEstadoTipo[$data['estado']];
+        if (isset(CasoEtica::TIPO_OFICIO_POR_ESTADO[$data['estado']])) {
+            $data['tipo_oficio'] = CasoEtica::TIPO_OFICIO_POR_ESTADO[$data['estado']];
         }
 
         $caso->update($data);

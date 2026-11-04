@@ -122,14 +122,6 @@ Route::middleware('auth')->group(function () {
             Route::put('/notas/{nota}', [NotaDisciplinaController::class, 'update'])->name('tribunal.notas.update');
         });
 
-        // Borradores recibidos por el bot de Telegram
-        Route::middleware(['permission:gestionar sanciones'])->group(function () {
-            Route::get('/borradores-telegram', [\App\Http\Controllers\TelegramBorradorController::class, 'index'])->name('telegram.borradores.index');
-            Route::get('/borradores-telegram/{borrador}', [\App\Http\Controllers\TelegramBorradorController::class, 'show'])->name('telegram.borradores.show');
-            Route::post('/borradores-telegram/{borrador}/aprobar', [\App\Http\Controllers\TelegramBorradorController::class, 'aprobar'])->name('telegram.borradores.aprobar');
-            Route::post('/borradores-telegram/{borrador}/descartar', [\App\Http\Controllers\TelegramBorradorController::class, 'descartar'])->name('telegram.borradores.descartar');
-        });
-
         // PDFs - accesibles para todos los que pueden ver el tribunal
         Route::get('/sanciones/{id}/oficio', [SancionController::class, 'emitirOficio'])->name('tribunal.sanciones.oficio');
         Route::get('/acta', [SancionController::class, 'emitirActaFecha'])->name('tribunal.acta');
@@ -146,6 +138,14 @@ Route::middleware('auth')->group(function () {
             Route::delete('/{id}', [EticaController::class, 'destroy'])->name('etica.destroy');
         });
     });
+    // Borradores recibidos por el bot de Telegram (disciplina o ética; el controlador revisa el permiso de cada módulo)
+    Route::prefix('borradores-telegram')->middleware(['permission:gestionar sanciones|gestionar etica'])->group(function () {
+        Route::get('/', [\App\Http\Controllers\TelegramBorradorController::class, 'index'])->name('telegram.borradores.index');
+        Route::get('/{borrador}', [\App\Http\Controllers\TelegramBorradorController::class, 'show'])->name('telegram.borradores.show');
+        Route::post('/{borrador}/aprobar', [\App\Http\Controllers\TelegramBorradorController::class, 'aprobar'])->name('telegram.borradores.aprobar');
+        Route::post('/{borrador}/descartar', [\App\Http\Controllers\TelegramBorradorController::class, 'descartar'])->name('telegram.borradores.descartar');
+    });
+
     // Referencias de Oficios Dinámicas
     Route::middleware(['permission:gestionar sanciones|gestionar notas|gestionar etica'])->group(function () {
         Route::post('/referencias-oficio', [\App\Http\Controllers\ReferenciaOficioController::class, 'store'])->name('referencias-oficio.store');

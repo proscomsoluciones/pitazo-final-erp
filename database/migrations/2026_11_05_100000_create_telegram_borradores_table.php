@@ -16,8 +16,9 @@ return new class extends Migration
             $table->string('telegram_user_id');
             $table->string('telegram_usuario')->nullable();
             $table->text('texto_original');
+            $table->string('modulo', 20)->default('DISCIPLINA'); // DISCIPLINA, ETICA
 
-            // Sanciones y notas interpretadas (se editan antes de aprobar)
+            // Registros interpretados (se editan antes de aprobar)
             $table->json('items');
 
             // Contexto sugerido por el dictado; se confirma al aprobar

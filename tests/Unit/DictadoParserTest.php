@@ -7,9 +7,9 @@ use PHPUnit\Framework\TestCase;
 
 class DictadoParserTest extends TestCase
 {
-    private function parse(string $texto): array
+    private function parse(string $texto, string $modulo = DictadoParser::DISCIPLINA): array
     {
-        return (new DictadoParser())->parse($texto);
+        return (new DictadoParser())->parse($texto, $modulo);
     }
 
     public function test_sancion_completa_en_orden(): void
@@ -103,5 +103,76 @@ class DictadoParserTest extends TestCase
 
         $this->assertSame('AMONESTACION', $item['unidad']);
         $this->assertSame(1, $item['cantidad']);
+    }
+
+    public function test_carta_de_amonestacion_conserva_el_texto(): void
+    {
+        $item = $this->parse('Carta de amonestación al Sr. Oscar Girola DT, Santa Margarita, mal comportamiento, 10.000')['items'][0];
+
+        $this->assertSame('NOTA', $item['tipo']);
+        $this->assertSame(10000, $item['monto']);
+        $this->assertSame(['Santa Margarita', 'mal comportamiento'], $item['candidatos_club']);
+        $this->assertStringStartsWith('Carta de amonestación al Sr. Oscar Girola DT', $item['nota']);
+    }
+
+    public function test_fondo_con_porcentaje(): void
+    {
+        $item = $this->parse('Fondo 27, Alianza, Julio Astete Valenzuela, 13262615-4, 100%')['items'][0];
+
+        $this->assertSame('FONDO', $item['tipo']);
+        $this->assertSame(27, $item['numero_fondo']);
+        $this->assertSame('Alianza', $item['club_texto']);
+        $this->assertSame('Julio Astete Valenzuela', $item['jugador_texto']);
+        $this->assertSame('13.262.615-4', $item['rut']);
+        $this->assertSame([100, 5000], [$item['porcentaje'], $item['monto']]);
+    }
+
+    public function test_fondo_por_dias_y_fractura(): void
+    {
+        $items = $this->parse("Fondo solidario N° 28, Alianza, Raúl Castro Silva, 16.402.463-6, 10 días\nFondo, Peñarol, Anette Valencia, fractura 21 días")['items'];
+
+        $this->assertSame([28, 75, 3750], [$items[0]['numero_fondo'], $items[0]['porcentaje'], $items[0]['monto']]);
+        $this->assertSame('Aporte por 10 días', $items[0]['diagnostico']);
+
+        $this->assertNull($items[1]['numero_fondo']);
+        $this->assertSame([200, 10000], [$items[1]['porcentaje'], $items[1]['monto']]);
+        $this->assertSame('Fractura, aporte por 21 días', $items[1]['diagnostico']);
+        $this->assertContains('Sin RUT.', $items[1]['avisos']);
+    }
+
+    public function test_expediente_de_inhabilitacion(): void
+    {
+        $item = $this->parse(
+            'Arcoíris, Víctor Figueroa Fernández, 17.273.112-0, dirigente, 206 I, inhabilitación 1 año desde 11-04-2026, se rebaja la sanción',
+            DictadoParser::ETICA
+        )['items'][0];
+
+        $this->assertSame('EXPEDIENTE', $item['tipo']);
+        $this->assertSame('DIRIGENTE', $item['calidad']);
+        $this->assertSame('17.273.112-0', $item['rut']);
+        $this->assertSame('Art. 206 Letra I', $item['articulo']);
+        $this->assertSame('INHABILITADO', $item['estado']);
+        $this->assertSame(['cantidad' => 1, 'unidad' => 'AÑOS'], $item['duracion']);
+        $this->assertSame('2026-04-11', $item['desde']);
+        $this->assertSame(['Arcoíris', 'Víctor Figueroa Fernández', 'se rebaja la sanción'], $item['textos']);
+    }
+
+    public function test_expediente_de_citacion_y_sin_medida(): void
+    {
+        $items = $this->parse("Valencia, Pedro Pérez, jugador, citación 12-11-2026 19:30, insultos al turno\nTurno, Margarita Vargas, 207, ingreso de oficios", DictadoParser::ETICA)['items'];
+
+        $this->assertSame('CITADO', $items[0]['estado']);
+        $this->assertSame('2026-11-12 19:30', $items[0]['fecha_citacion']);
+
+        $this->assertSame('TURNO', $items[1]['calidad']);
+        $this->assertSame('EN_INVESTIGACION', $items[1]['estado']);
+        $this->assertNotEmpty($items[1]['avisos']);
+    }
+
+    public function test_detectar_modulo_en_la_primera_linea(): void
+    {
+        $this->assertSame([DictadoParser::ETICA, 'Valencia, Pedro'], DictadoParser::detectarModulo("Ética\nValencia, Pedro"));
+        $this->assertSame([DictadoParser::DISCIPLINA, 'Valencia, Pedro'], DictadoParser::detectarModulo("disciplina:\nValencia, Pedro"));
+        $this->assertSame([null, 'Valencia, Pedro'], DictadoParser::detectarModulo('Valencia, Pedro'));
     }
 }

@@ -12,6 +12,27 @@ class CasoEtica extends Model
 
     protected $table = 'casos_etica';
 
+    // El tipo de oficio se sincroniza con el estado del expediente
+    public const TIPO_OFICIO_POR_ESTADO = [
+        'EN_INVESTIGACION' => 'INVESTIGACION',
+        'CITADO'           => 'CITACION',
+        'INHABILITADO'     => 'INHABILITACION',
+        'AMONESTADO'       => 'AMONESTACION',
+        'RESUELTO'         => 'RESOLUCION',
+        'ARCHIVADO'        => 'RESOLUCION',
+    ];
+
+    /**
+     * Folio único ETICA-YYYY-0000X del año en curso.
+     */
+    public static function siguienteFolio(): string
+    {
+        $year = now()->year;
+        $count = static::whereYear('created_at', $year)->count() + 1;
+
+        return sprintf('ETICA-%s-%05d', $year, $count);
+    }
+
     protected $fillable = [
         'folio',
         'tipo_oficio',

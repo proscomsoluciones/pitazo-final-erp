@@ -383,14 +383,14 @@ export default function Authenticated({
                                         </div>
                                     </Dropdown.Link>
                                 )}
-                                {hasPermission('gestionar sanciones') && (
+                                {(hasPermission('gestionar sanciones') || hasPermission('gestionar etica')) && (
                                     <Dropdown.Link href={route('telegram.borradores.index')} className="flex items-center gap-3 font-extrabold text-slate-900 py-3">
                                         <div className="p-2.5 bg-slate-100 rounded-xl text-slate-900 font-bold shrink-0">
                                             <Send size={18} />
                                         </div>
                                         <div>
                                             <span className="block font-black text-slate-900 text-sm leading-tight">Borradores Telegram</span>
-                                            <span className="block text-xs text-slate-600 font-bold mt-0.5">Sanciones dictadas al bot</span>
+                                            <span className="block text-xs text-slate-600 font-bold mt-0.5">Disciplina y ética dictadas al bot</span>
                                         </div>
                                     </Dropdown.Link>
                                 )}
@@ -515,7 +515,7 @@ export default function Authenticated({
                         <Link href={route('fondos.index')} onClick={() => setShowingNavigationDropdown(false)} className="flex items-center space-x-3 px-4 py-2.5 rounded-xl font-bold bg-slate-50 text-slate-800">
                             <HeartHandshake size={18} /> <span>Fondo Solidario</span>
                         </Link>
-                        {hasPermission('gestionar sanciones') && (
+                        {(hasPermission('gestionar sanciones') || hasPermission('gestionar etica')) && (
                             <Link href={route('telegram.borradores.index')} onClick={() => setShowingNavigationDropdown(false)} className="flex items-center space-x-3 px-4 py-2.5 rounded-xl font-bold bg-slate-50 text-slate-800">
                                 <Send size={18} /> <span>Borradores Telegram</span>
                             </Link>

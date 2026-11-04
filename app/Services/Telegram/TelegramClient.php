@@ -2,7 +2,6 @@
 
 namespace App\Services\Telegram;
 
-use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
@@ -11,50 +10,73 @@ use RuntimeException;
  */
 class TelegramClient
 {
-    public function enviarMensaje(string|int $chatId, string $html): void
+    public function enviarMensaje(string|int $chatId, string $html, ?array $botones = null): void
     {
-        $this->http()->post('sendMessage', [
+        $this->llamar('sendMessage', array_filter([
             'chat_id' => $chatId,
             'text' => $html,
             'parse_mode' => 'HTML',
             'disable_web_page_preview' => true,
-        ])->throw();
+            'reply_markup' => $botones ? json_encode(['inline_keyboard' => $botones]) : null,
+        ]));
+    }
+
+    public function editarMensaje(string|int $chatId, int $messageId, string $html): void
+    {
+        $this->llamar('editMessageText', [
+            'chat_id' => $chatId,
+            'message_id' => $messageId,
+            'text' => $html,
+            'parse_mode' => 'HTML',
+        ]);
+    }
+
+    public function responderBoton(string $callbackId, ?string $texto = null): void
+    {
+        $this->llamar('answerCallbackQuery', array_filter(['callback_query_id' => $callbackId, 'text' => $texto]));
     }
 
     public function obtenerActualizaciones(?int $offset, int $timeout = 25): array
     {
-        return $this->http()
-            ->timeout($timeout + 10)
-            ->get('getUpdates', array_filter([
-                'offset' => $offset,
-                'timeout' => $timeout,
-                'allowed_updates' => json_encode(['message']),
-            ], fn ($v) => $v !== null))
-            ->throw()
-            ->json('result', []);
+        return $this->llamar('getUpdates', array_filter([
+            'offset' => $offset,
+            'timeout' => $timeout,
+            'allowed_updates' => json_encode(['message', 'callback_query']),
+        ], fn ($v) => $v !== null), $timeout + 10) ?? [];
     }
 
-    public function configurarWebhook(string $url, ?string $secreto): array
+    public function configurarWebhook(string $url, ?string $secreto): void
     {
-        return $this->http()->post('setWebhook', array_filter([
+        $this->llamar('setWebhook', array_filter([
             'url' => $url,
             'secret_token' => $secreto,
-            'allowed_updates' => ['message'],
-        ]))->throw()->json();
+            'allowed_updates' => json_encode(['message', 'callback_query']),
+        ]));
     }
 
-    public function eliminarWebhook(): array
+    public function eliminarWebhook(): void
     {
-        return $this->http()->post('deleteWebhook')->throw()->json();
+        $this->llamar('deleteWebhook');
     }
 
-    private function http(): PendingRequest
+    private function llamar(string $metodo, array $datos = [], int $timeout = 15): mixed
     {
         $token = config('services.telegram.token');
         if (!$token) {
             throw new RuntimeException('Falta TELEGRAM_BOT_TOKEN en el archivo .env');
         }
 
-        return Http::baseUrl("https://api.telegram.org/bot{$token}/")->acceptJson();
+        try {
+            return Http::timeout($timeout)
+                ->connectTimeout(10)
+                ->asForm()
+                ->acceptJson()
+                ->post("https://api.telegram.org/bot{$token}/{$metodo}", $datos)
+                ->throw()
+                ->json('result');
+        } catch (\Throwable $e) {
+            // La URL de la Bot API incluye el token: nunca dejarlo en mensajes ni logs
+            throw new RuntimeException("Telegram ({$metodo}): " . str_replace($token, '***', $e->getMessage()), 0);
+        }
     }
 }

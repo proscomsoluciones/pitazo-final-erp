@@ -18,8 +18,17 @@ class TelegramPoll extends Command
         $this->info('Escuchando mensajes de Telegram... (Ctrl+C para detener)');
 
         do {
-            $offset = Cache::get('telegram:offset');
-            $updates = $telegram->obtenerActualizaciones($offset, $this->option('once') ? 0 : 25);
+            try {
+                $updates = $telegram->obtenerActualizaciones(Cache::get('telegram:offset'), $this->option('once') ? 0 : 25);
+            } catch (\RuntimeException $e) {
+                // Cortes de red: reintentar en vez de cerrar el bot
+                $this->warn(now()->format('H:i:s') . ' Sin conexión con Telegram, reintentando... (' . $e->getMessage() . ')');
+                if ($this->option('once')) {
+                    return self::FAILURE;
+                }
+                sleep(5);
+                continue;
+            }
 
             foreach ($updates as $update) {
                 // Avanzar el offset antes de atender, para no reprocesar un mensaje que falle
@@ -27,7 +36,7 @@ class TelegramPoll extends Command
 
                 try {
                     $bot->atender($update);
-                    $this->line('Mensaje ' . $update['update_id'] . ' atendido.');
+                    $this->line(now()->format('H:i:s') . ' Mensaje ' . $update['update_id'] . ' atendido.');
                 } catch (\Throwable $e) {
                     $this->error('Error en mensaje ' . $update['update_id'] . ': ' . $e->getMessage());
                     report($e);

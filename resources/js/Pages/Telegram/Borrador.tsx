@@ -8,8 +8,10 @@ interface Jugador { id: number; nombre: string; club_id: number | null }
 interface Fase { id: number; nombre: string; cantidad_fechas: number }
 interface Campeonato { id: number; nombre: string; fases: Fase[] }
 
+type EstadoEtica = 'EN_INVESTIGACION' | 'CITADO' | 'INHABILITADO' | 'AMONESTADO' | 'RESUELTO' | 'ARCHIVADO';
+
 interface Item {
-    tipo: 'SANCION' | 'NOTA' | 'ERROR';
+    tipo: 'SANCION' | 'NOTA' | 'FONDO' | 'EXPEDIENTE' | 'ERROR';
     linea: string;
     incluir: boolean;
     avisos: string[];
@@ -24,15 +26,32 @@ interface Item {
     unidad?: 'PARTIDOS' | 'MESES' | 'AÑOS' | 'AMONESTACION' | null;
     reincidencia?: boolean;
     sanciones_previas?: number;
-    // Nota
+    // Nota y fondo
     nota?: string | null;
     monto?: number | null;
+    // Fondo solidario
+    numero_fondo?: number | null;
+    rut?: string | null;
+    porcentaje?: number | null;
+    diagnostico?: string | null;
+    // Expediente de ética (estado también se usa en fondos: PENDIENTE / PAGADO)
+    estado?: EstadoEtica | 'PENDIENTE' | 'PAGADO' | null;
+    calidad?: 'JUGADOR' | 'DIRIGENTE' | 'TURNO' | 'CLUB' | null;
+    nombre?: string | null;
+    asunto?: string | null;
+    descripcion?: string | null;
+    detalles_resolucion?: string | null;
+    fecha_citacion?: string | null;
+    lugar_citacion?: string | null;
+    fecha_inicio_inhabilitacion?: string | null;
+    fecha_fin_inhabilitacion?: string | null;
 }
 
 interface Borrador {
     id: number;
     texto_original: string;
     telegram_usuario: string | null;
+    modulo: 'DISCIPLINA' | 'ETICA';
     items: Item[];
     estado: 'PENDIENTE' | 'APROBADO' | 'DESCARTADO';
     campeonato_id: number | null;
@@ -41,7 +60,7 @@ interface Borrador {
     fecha_resolucion: string | null;
     created_at: string;
     revisor?: { name: string } | null;
-    resultado?: { sanciones: number[]; notas: number[] } | null;
+    resultado?: { sanciones: number[]; notas: number[]; fondos?: number[]; expedientes?: number[] } | null;
 }
 
 interface Props {
@@ -49,14 +68,34 @@ interface Props {
     clubes: Club[];
     jugadores: Jugador[];
     campeonatos: Campeonato[];
+    referencias: string[];
 }
 
 const input = 'w-full rounded-xl border-slate-200 bg-white text-sm focus:ring-2 focus:ring-sky-500 disabled:bg-slate-100';
 const label = 'block text-[11px] font-black uppercase tracking-wider text-slate-500 mb-1';
 
-export default function Borrador({ borrador, clubes, jugadores, campeonatos }: Props) {
+const TIPOS: Record<Item['tipo'], { texto: string; clase: string }> = {
+    SANCION: { texto: 'Sanción', clase: 'bg-sky-100 text-sky-800' },
+    NOTA: { texto: 'Multa / nota', clase: 'bg-violet-100 text-violet-800' },
+    FONDO: { texto: 'Fondo solidario', clase: 'bg-rose-100 text-rose-800' },
+    EXPEDIENTE: { texto: 'Expediente de ética', clase: 'bg-indigo-100 text-indigo-800' },
+    ERROR: { texto: 'No se entendió', clase: 'bg-red-100 text-red-800' },
+};
+
+// "2 sanción(es), 1 fondo(s) solidario(s)"
+const describirResultado = (r?: Borrador['resultado']) => {
+    if (!r) return 'sin registros';
+    const partes = [
+        [r.sanciones?.length, 'sanción(es)'], [r.notas?.length, 'multa(s)/nota(s)'],
+        [r.fondos?.length, 'fondo(s) solidario(s)'], [r.expedientes?.length, 'expediente(s) de ética'],
+    ].filter(([n]) => n).map(([n, t]) => `${n} ${t}`);
+    return partes.join(', ') || 'sin registros';
+};
+
+export default function Borrador({ borrador, clubes, jugadores, campeonatos, referencias }: Props) {
     const { errors, flash } = usePage<any>().props;
     const editable = borrador.estado === 'PENDIENTE';
+    const esEtica = borrador.modulo === 'ETICA';
 
     const [items, setItems] = useState<Item[]>(borrador.items);
     const [contexto, setContexto] = useState({
@@ -103,7 +142,9 @@ export default function Borrador({ borrador, clubes, jugadores, campeonatos }: P
                         <Send size={24} />
                     </div>
                     <div>
-                        <h2 className="text-2xl font-bold tracking-tight text-slate-900">Borrador #{borrador.id}</h2>
+                        <h2 className="text-2xl font-bold tracking-tight text-slate-900">
+                            Borrador #{borrador.id} · {esEtica ? 'Ética' : 'Disciplina'}
+                        </h2>
                         <p className="text-xs text-slate-500 font-medium">
                             Enviado por {borrador.telegram_usuario ?? 'Telegram'} el{' '}
                             {new Date(borrador.created_at).toLocaleString('es-CL', { dateStyle: 'short', timeStyle: 'short' })}
@@ -140,7 +181,7 @@ export default function Borrador({ borrador, clubes, jugadores, campeonatos }: P
                         }`}>
                             {borrador.estado === 'APROBADO' ? <CheckCircle2 size={18} /> : <XCircle size={18} />}
                             {borrador.estado === 'APROBADO'
-                                ? `Aprobado: ${borrador.resultado?.sanciones.length ?? 0} sanción(es) y ${borrador.resultado?.notas.length ?? 0} nota(s) registradas`
+                                ? `Aprobado: ${describirResultado(borrador.resultado)}`
                                 : 'Descartado'}
                             {borrador.revisor && ` por ${borrador.revisor.name}`}.
                         </div>
@@ -154,7 +195,9 @@ export default function Borrador({ borrador, clubes, jugadores, campeonatos }: P
 
                     {/* Fecha del registro */}
                     <div className="bg-white rounded-3xl shadow-sm border border-slate-200/80 p-6">
-                        <h3 className="text-lg font-bold text-slate-800 mb-4">¿A qué fecha corresponde?</h3>
+                        <h3 className="text-lg font-bold text-slate-800 mb-4">
+                            {esEtica ? 'Campeonato y fecha relacionados (opcional)' : '¿A qué fecha corresponde?'}
+                        </h3>
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                             <div>
                                 <span className={label}>Campeonato</span>
@@ -189,15 +232,16 @@ export default function Borrador({ borrador, clubes, jugadores, campeonatos }: P
                     </div>
 
                     {/* Registros */}
+                    <datalist id="referencias-etica">
+                        {referencias.map(r => <option key={r} value={r} />)}
+                    </datalist>
                     <div className="space-y-3">
                         {items.map((item, i) => (
                             <div key={i} className={`bg-white rounded-2xl shadow-xs border p-5 ${item.incluir ? 'border-slate-200' : 'border-slate-200 opacity-60'}`}>
                                 <div className="flex items-start justify-between gap-3 mb-3">
                                     <div className="min-w-0">
-                                        <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-black mr-2 ${
-                                            item.tipo === 'SANCION' ? 'bg-sky-100 text-sky-800' : item.tipo === 'NOTA' ? 'bg-violet-100 text-violet-800' : 'bg-red-100 text-red-800'
-                                        }`}>
-                                            {item.tipo === 'SANCION' ? 'Sanción' : item.tipo === 'NOTA' ? 'Multa / nota' : 'No se entendió'}
+                                        <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-black mr-2 ${TIPOS[item.tipo].clase}`}>
+                                            {TIPOS[item.tipo].texto}
                                         </span>
                                         <span className="text-xs text-slate-500 italic break-words">“{item.linea}”</span>
                                     </div>
@@ -226,6 +270,13 @@ export default function Borrador({ borrador, clubes, jugadores, campeonatos }: P
                                 )}
                                 {item.tipo === 'NOTA' && (
                                     <FilaNota item={item} editable={editable && item.incluir} clubes={clubes} onChange={c => actualizar(i, c)} />
+                                )}
+                                {item.tipo === 'FONDO' && (
+                                    <FilaFondo item={item} editable={editable && item.incluir} clubes={clubes} onChange={c => actualizar(i, c)} />
+                                )}
+                                {item.tipo === 'EXPEDIENTE' && (
+                                    <FilaExpediente item={item} editable={editable && item.incluir} clubes={clubes} jugadores={jugadores}
+                                        onChange={c => actualizar(i, c)} />
                                 )}
                             </div>
                         ))}
@@ -353,6 +404,187 @@ function FilaNota({ item, editable, clubes, onChange }: {
     );
 }
 
+// Tabla oficial del Fondo Solidario: % -> monto
+const MONTO_POR_PORCENTAJE: Record<number, number> = { 50: 2500, 75: 3750, 100: 5000, 200: 10000 };
+
+function FilaFondo({ item, editable, clubes, onChange }: {
+    item: Item; editable: boolean; clubes: Club[]; onChange: (c: Partial<Item>) => void;
+}) {
+    return (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+            <div>
+                <span className={label}>N° fondo</span>
+                <input type="number" min={1} className={input} disabled={!editable} placeholder="Automático"
+                    value={item.numero_fondo ?? ''} onChange={e => onChange({ numero_fondo: e.target.value ? Number(e.target.value) : null })} />
+            </div>
+            <div className="lg:col-span-2">
+                <span className={label}>Club</span>
+                <select className={input} disabled={!editable} value={item.club_id ?? ''}
+                    onChange={e => onChange({ club_id: e.target.value ? Number(e.target.value) : null })}>
+                    <option value="">Seleccionar…</option>
+                    {clubes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+            </div>
+            <div className="lg:col-span-2">
+                <span className={label}>Jugador</span>
+                <input className={input} disabled={!editable} value={item.jugador_nombre ?? ''}
+                    onChange={e => onChange({ jugador_nombre: e.target.value })} />
+            </div>
+            <div>
+                <span className={label}>RUT</span>
+                <input className={input} disabled={!editable} value={item.rut ?? ''} placeholder="12.345.678-9"
+                    onChange={e => onChange({ rut: e.target.value })} />
+            </div>
+            <div className="lg:col-span-3">
+                <span className={label}>Diagnóstico</span>
+                <input className={input} disabled={!editable} value={item.diagnostico ?? ''}
+                    onChange={e => onChange({ diagnostico: e.target.value })} />
+            </div>
+            <div>
+                <span className={label}>Beneficio</span>
+                <select className={input} disabled={!editable} value={item.porcentaje ?? ''}
+                    onChange={e => {
+                        const pct = e.target.value ? Number(e.target.value) : null;
+                        onChange({ porcentaje: pct, monto: pct ? MONTO_POR_PORCENTAJE[pct] ?? item.monto : item.monto });
+                    }}>
+                    <option value="">Seleccionar…</option>
+                    {[50, 75, 100, 200].map(p => <option key={p} value={p}>{p}%</option>)}
+                </select>
+            </div>
+            <div>
+                <span className={label}>Monto ($)</span>
+                <input type="number" min={0} className={input} disabled={!editable} value={item.monto ?? ''}
+                    onChange={e => onChange({ monto: e.target.value ? Number(e.target.value) : null })} />
+            </div>
+            <div>
+                <span className={label}>Estado</span>
+                <select className={input} disabled={!editable} value={item.estado ?? 'PAGADO'}
+                    onChange={e => onChange({ estado: e.target.value as Item['estado'] })}>
+                    <option value="PAGADO">Pagado</option>
+                    <option value="PENDIENTE">Pendiente</option>
+                </select>
+            </div>
+        </div>
+    );
+}
+
+const ESTADOS_ETICA: { valor: EstadoEtica; texto: string }[] = [
+    { valor: 'EN_INVESTIGACION', texto: 'Apertura de investigación' },
+    { valor: 'CITADO', texto: 'Citación' },
+    { valor: 'INHABILITADO', texto: 'Inhabilitación' },
+    { valor: 'AMONESTADO', texto: 'Amonestación' },
+    { valor: 'RESUELTO', texto: 'Resolución' },
+    { valor: 'ARCHIVADO', texto: 'Archivo' },
+];
+
+function FilaExpediente({ item, editable, clubes, jugadores, onChange }: {
+    item: Item; editable: boolean; clubes: Club[]; jugadores: Jugador[]; onChange: (c: Partial<Item>) => void;
+}) {
+    const esResolucion = item.estado === 'RESUELTO' || item.estado === 'ARCHIVADO';
+    const delClub = jugadores.filter(j => j.club_id === item.club_id);
+
+    return (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+            <div>
+                <span className={label}>Calidad</span>
+                <select className={input} disabled={!editable} value={item.calidad ?? 'JUGADOR'}
+                    onChange={e => onChange({ calidad: e.target.value as Item['calidad'], jugador_id: null })}>
+                    <option value="JUGADOR">Jugador</option>
+                    <option value="DIRIGENTE">Dirigente</option>
+                    <option value="TURNO">Turno</option>
+                    <option value="CLUB">Club</option>
+                </select>
+            </div>
+            <div className="lg:col-span-2">
+                <span className={label}>Club {item.calidad === 'TURNO' || item.calidad === 'DIRIGENTE' ? '(opcional)' : ''}</span>
+                <select className={input} disabled={!editable} value={item.club_id ?? ''}
+                    onChange={e => onChange({ club_id: e.target.value ? Number(e.target.value) : null, jugador_id: null })}>
+                    <option value="">Sin club</option>
+                    {clubes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+            </div>
+            {item.calidad !== 'CLUB' && (
+                <>
+                    <div className="lg:col-span-2">
+                        <span className={label}>Nombre completo</span>
+                        {item.calidad === 'JUGADOR' && item.club_id && (
+                            <select className={`${input} mb-1.5`} disabled={!editable} value={item.jugador_id ?? ''}
+                                onChange={e => {
+                                    const jugador = delClub.find(j => j.id === Number(e.target.value));
+                                    onChange({ jugador_id: jugador?.id ?? null, nombre: jugador?.nombre ?? item.nombre });
+                                }}>
+                                <option value="">Escribir nombre…</option>
+                                {delClub.map(j => <option key={j.id} value={j.id}>{j.nombre}</option>)}
+                            </select>
+                        )}
+                        {!item.jugador_id && (
+                            <input className={input} disabled={!editable} value={item.nombre ?? ''}
+                                onChange={e => onChange({ nombre: e.target.value })} />
+                        )}
+                    </div>
+                    <div>
+                        <span className={label}>RUT</span>
+                        <input className={input} disabled={!editable} value={item.rut ?? ''} placeholder="12.345.678-9"
+                            onChange={e => onChange({ rut: e.target.value })} />
+                    </div>
+                </>
+            )}
+            <div>
+                <span className={label}>Artículo</span>
+                <input className={input} disabled={!editable} value={item.articulo ?? ''} placeholder="Art. 206 Letra I"
+                    onChange={e => onChange({ articulo: e.target.value })} />
+            </div>
+            <div className="lg:col-span-2">
+                <span className={label}>Medida</span>
+                <select className={input} disabled={!editable} value={item.estado ?? 'EN_INVESTIGACION'}
+                    onChange={e => onChange({ estado: e.target.value as EstadoEtica })}>
+                    {ESTADOS_ETICA.map(o => <option key={o.valor} value={o.valor}>{o.texto}</option>)}
+                </select>
+            </div>
+            <div className="lg:col-span-3">
+                <span className={label}>Referencia del oficio (REF)</span>
+                <input className={input} disabled={!editable} list="referencias-etica" value={item.asunto ?? ''}
+                    onChange={e => onChange({ asunto: e.target.value })} />
+            </div>
+            {item.estado === 'CITADO' && (
+                <>
+                    <div className="lg:col-span-2">
+                        <span className={label}>Fecha y hora de citación</span>
+                        <input type="datetime-local" className={input} disabled={!editable}
+                            value={item.fecha_citacion?.replace(' ', 'T').substring(0, 16) ?? ''}
+                            onChange={e => onChange({ fecha_citacion: e.target.value })} />
+                    </div>
+                    <div className="lg:col-span-4">
+                        <span className={label}>Lugar</span>
+                        <input className={input} disabled={!editable} value={item.lugar_citacion ?? ''}
+                            onChange={e => onChange({ lugar_citacion: e.target.value })} />
+                    </div>
+                </>
+            )}
+            {item.estado === 'INHABILITADO' && (
+                <>
+                    <div className="lg:col-span-3">
+                        <span className={label}>Inhabilitado desde</span>
+                        <input type="date" className={input} disabled={!editable} value={item.fecha_inicio_inhabilitacion ?? ''}
+                            onChange={e => onChange({ fecha_inicio_inhabilitacion: e.target.value })} />
+                    </div>
+                    <div className="lg:col-span-3">
+                        <span className={label}>Hasta</span>
+                        <input type="date" className={input} disabled={!editable} value={item.fecha_fin_inhabilitacion ?? ''}
+                            onChange={e => onChange({ fecha_fin_inhabilitacion: e.target.value })} />
+                    </div>
+                </>
+            )}
+            <div className="lg:col-span-6">
+                <span className={label}>{esResolucion ? 'Lo resuelto' : 'Descripción / antecedentes'}</span>
+                <textarea rows={2} className={input} disabled={!editable}
+                    value={(esResolucion ? item.detalles_resolucion : item.descripcion) ?? ''}
+                    onChange={e => onChange(esResolucion ? { detalles_resolucion: e.target.value } : { descripcion: e.target.value })} />
+            </div>
+        </div>
+    );
+}
+
 // "items.2.club_id" -> "Registro 3, club"
 function describirCampo(campo: string): string {
     const m = campo.match(/^items\.(\d+)\.(.+)$/);
@@ -360,6 +592,9 @@ function describirCampo(campo: string): string {
     const nombres: Record<string, string> = {
         club_id: 'club', jugador_nombre: 'jugador', articulo: 'artículo', tipo_falta: 'motivo',
         cantidad: 'cantidad', unidad: 'unidad', nota: 'detalle', monto: 'monto',
+        numero_fondo: 'N° de fondo', rut: 'RUT', porcentaje: 'beneficio', diagnostico: 'diagnóstico', estado: 'estado',
+        calidad: 'calidad', nombre: 'nombre', asunto: 'referencia', fecha_citacion: 'fecha de citación',
+        fecha_inicio_inhabilitacion: 'inicio de inhabilitación', fecha_fin_inhabilitacion: 'término de inhabilitación',
     };
     return `Registro ${Number(m[1]) + 1}, ${nombres[m[2]] ?? m[2]}`;
 }
