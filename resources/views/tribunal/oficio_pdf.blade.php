@@ -255,11 +255,11 @@
 
         /* ── CIERRE ── */
         .closing {
-            margin-top: 18px;
+            margin-top: 12px;
             font-size: 11pt;
         }
         .atentamente {
-            margin-top: 25px;
+            margin-top: 16px;
             font-weight: bold;
             font-size: 11pt;
         }
@@ -274,7 +274,7 @@
         .signatures-table {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 55px;
+            margin-top: 42px;
             page-break-inside: avoid;
         }
         .signatures-table td {
@@ -305,7 +305,7 @@
 
         /* ── DISTRIBUCIÓN ── */
         .distribucion {
-            margin-top: 30px;
+            margin-top: 18px;
             border-top: 1px solid #cbd5e1;
             padding-top: 10px;
             font-family: 'Helvetica', 'Arial', sans-serif;
@@ -326,7 +326,7 @@
 
         /* ── PIE ── */
         .footer {
-            margin-top: 20px;
+            margin-top: 10px;
             font-size: 8pt;
             color: #94a3b8;
             text-align: center;
@@ -336,7 +336,7 @@
         }
 
         .confidencial-note {
-            margin-top: 18px;
+            margin-top: 10px;
             padding: 6px 10px;
             border: 1px dashed #cbd5e1;
             border-radius: 4px;
@@ -493,21 +493,29 @@
 
     @elseif($sancion->estado === 'ACTIVO')
         {{-- OFICIO DE SANCIÓN --}}
-        <p class="body-text">
-            Junto con saludar, el Comité de Disciplina informa que, en reunión celebrada con fecha
-            <strong>{{ \Carbon\Carbon::parse($sancion->fecha_resolucion)->translatedFormat('j \d\e F \d\e Y') }}</strong>,
-            se ha resuelto sancionar al
-            @if($invTipo === 'CLUB' || (!$invNombre && $sancion->club))
-                club <strong>{{ $sancion->club->name ?? 'Club' }}</strong>,
-            @else
-                {{ $invCargoLabel }} <strong>{{ $invNombre }}</strong>@if($invRut),
-                con RUT <strong>{{ $invRut }}</strong>@endif @if($sancion->club),
-                perteneciente al <strong>{{ $sancion->club->name }}</strong>@endif,
-            @endif
-            conforme a lo establecido en el
-            <strong>{{ $sancion->articulo_reglamento }}</strong>
-            del Reglamento ANFA vigente, aplicándose la siguiente sanción:
-        </p>
+        @if($sancion->resolucion_texto)
+            <p class="body-text">
+                Junto con saludar, se transcribe la resolución adoptada en reunión celebrada con fecha
+                <strong>{{ \Carbon\Carbon::parse($sancion->fecha_resolucion)->translatedFormat('j \d\e F \d\e Y') }}</strong>:
+                {!! nl2br(e($sancion->resolucion_texto)) !!}
+            </p>
+        @else
+            <p class="body-text">
+                Junto con saludar, el Comité de Disciplina informa que, en reunión celebrada con fecha
+                <strong>{{ \Carbon\Carbon::parse($sancion->fecha_resolucion)->translatedFormat('j \d\e F \d\e Y') }}</strong>,
+                se ha resuelto sancionar al
+                @if($invTipo === 'CLUB' || (!$invNombre && $sancion->club))
+                    club <strong>{{ $sancion->club->name ?? 'Club' }}</strong>,
+                @else
+                    {{ $invCargoLabel }} <strong>{{ $invNombre }}</strong>@if($invRut),
+                    con RUT <strong>{{ $invRut }}</strong>@endif @if($sancion->club),
+                    perteneciente al <strong>{{ $sancion->club->name }}</strong>@endif,
+                @endif
+                conforme a lo establecido en el
+                <strong>{{ $sancion->articulo_reglamento }}</strong>
+                del Reglamento ANFA vigente, aplicándose la siguiente sanción:
+            </p>
+        @endif
 
         <div class="sancion-box">
             <div class="sancion-title">RESOLUCIÓN &mdash; SANCIÓN APLICADA</div>
@@ -522,6 +530,14 @@
                         <strong>{{ $sancion->sancion_texto }}</strong>
                     </td>
                 </tr>
+                @if($sancion->tipo_sancion === 'PARTIDOS' && $sancion->habilitadoFase && $sancion->habilitado_numero_fecha)
+                    <tr>
+                        <td class="sancion-lbl">Habilitado a partir de:</td>
+                        <td class="sancion-val">
+                            <strong>Fecha {{ $sancion->habilitado_numero_fecha }} &mdash; {{ $sancion->habilitadoFase->nombre }}</strong>
+                        </td>
+                    </tr>
+                @endif
                 @if($sancion->tipo_sancion === 'TIEMPO' && $sancion->fecha_termino_cronologica)
                     <tr>
                         <td class="sancion-lbl">Cumple la sanción el:</td>
@@ -575,7 +591,11 @@
         </p>
 
         <div class="hab-box">
-            Por lo tanto, el {{ $invCargoLabel }} queda HABILITADO para participar en el campeonato oficial.
+            @if($sancion->tipo_sancion === 'PARTIDOS' && $sancion->habilitadoFase && $sancion->habilitado_numero_fecha)
+                Por lo tanto, el {{ $invCargoLabel }} queda HABILITADO para participar en el campeonato oficial a partir de la Fecha {{ $sancion->habilitado_numero_fecha }} del {{ $sancion->habilitadoFase->nombre }}.
+            @else
+                Por lo tanto, el {{ $invCargoLabel }} queda HABILITADO para participar en el campeonato oficial.
+            @endif
         </div>
     @endif
 

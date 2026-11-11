@@ -68,6 +68,9 @@ class SancionController extends Controller
             'articulo_reglamento' => 'required|string|max:255',
             'tipo_falta'          => 'required|string|max:255',
             'observacion'         => 'nullable|string',
+            'resolucion_texto'    => 'nullable|string|max:5000',
+            'habilitado_fase_id'  => 'nullable|exists:fases,id',
+            'habilitado_numero_fecha' => 'nullable|integer|min:1|required_with:habilitado_fase_id',
             'cantidad_sancion'    => 'required|integer|min:1',
             'tipo_sancion'        => 'required|in:PARTIDOS,TIEMPO,AMONESTACION',
             'unidad_tiempo'       => ['required', 'in:PARTIDOS,MESES,AÑOS,AMONESTACION', $this->unidadTiempoCoincideConTipo($request)],
@@ -154,6 +157,8 @@ class SancionController extends Controller
             $data['cantidad_sancion'] = 1;
             $data['unidad_tiempo'] = 'AMONESTACION';
             $data['fecha_termino_cronologica'] = null;
+            $data['habilitado_fase_id'] = null;
+            $data['habilitado_numero_fecha'] = null;
             $data['estado'] = 'CUMPLIDO';
         } else {
             $data['fecha_termino_cronologica'] = null;
@@ -190,6 +195,9 @@ class SancionController extends Controller
             'articulo_reglamento' => 'required|string|max:255',
             'tipo_falta'          => 'required|string|max:255',
             'observacion'         => 'nullable|string',
+            'resolucion_texto'    => 'nullable|string|max:5000',
+            'habilitado_fase_id'  => 'nullable|exists:fases,id',
+            'habilitado_numero_fecha' => 'nullable|integer|min:1|required_with:habilitado_fase_id',
             'cantidad_sancion'    => 'required|integer|min:1',
             'tipo_sancion'        => 'required|in:PARTIDOS,TIEMPO,AMONESTACION',
             'unidad_tiempo'       => ['required', 'in:PARTIDOS,MESES,AÑOS,AMONESTACION', $this->unidadTiempoCoincideConTipo($request)],
@@ -251,6 +259,8 @@ class SancionController extends Controller
             $data['cantidad_sancion'] = 1;
             $data['unidad_tiempo'] = 'AMONESTACION';
             $data['fecha_termino_cronologica'] = null;
+            $data['habilitado_fase_id'] = null;
+            $data['habilitado_numero_fecha'] = null;
         } else {
             $data['fecha_termino_cronologica'] = null;
         }
@@ -305,7 +315,7 @@ class SancionController extends Controller
     public function emitirOficio(int $id)
     {
         try {
-            $sancion = Sancion::with(['jugador', 'club', 'campeonato', 'fase'])->findOrFail($id);
+            $sancion = Sancion::with(['jugador', 'club', 'campeonato', 'fase', 'habilitadoFase'])->findOrFail($id);
 
             // Obtener nombres del Secretario y Presidente del sistema
             $secretario = \App\Models\User::role('Secretario')->first();

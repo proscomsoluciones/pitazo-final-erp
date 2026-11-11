@@ -29,6 +29,9 @@ class Sancion extends Model
         'fecha_termino_cronologica',
         'estado',
         'observacion',
+        'resolucion_texto',
+        'habilitado_fase_id',
+        'habilitado_numero_fecha',
     ];
 
     protected function casts(): array
@@ -62,6 +65,11 @@ class Sancion extends Model
     public function fase()
     {
         return $this->belongsTo(Fase::class);
+    }
+
+    public function habilitadoFase()
+    {
+        return $this->belongsTo(Fase::class, 'habilitado_fase_id');
     }
 
     /**

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
 import { Head, useForm, router, usePage } from '@inertiajs/react';
 import Modal from '@/Components/Modal';
@@ -54,6 +54,9 @@ interface Sancion {
     fecha_termino_cronologica: string | null;
     estado: string;
     observacion: string | null;
+    resolucion_texto?: string | null;
+    habilitado_fase_id?: number | null;
+    habilitado_numero_fecha?: number | null;
 }
 
 interface Nota {
@@ -74,6 +77,35 @@ interface Referencia {
     nombre: string;
     modulo: string;
 }
+
+// Sanciones previas del mismo jugador que cuentan como reincidencia (las amonestaciones no cuentan).
+// Al editar, solo son antecedentes las sanciones anteriores a la editada, no las posteriores.
+function buscarAntecedentes(sanciones: Sancion[], rut: string, nombre: string, editada: Sancion | null = null): Sancion[] {
+    const cleanRut = rut ? rut.replace(/[^kK0-9]/g, '').toLowerCase() : '';
+    const cleanName = nombre ? nombre.trim().toLowerCase() : '';
+
+    if (!cleanRut && !cleanName) return [];
+
+    const orden = (s: Sancion) => `${(s.fecha_resolucion || '').slice(0, 10)}#${String(s.id).padStart(10, '0')}`;
+
+    return sanciones.filter(s => {
+        if (editada && (s.id === editada.id || orden(s) > orden(editada))) return false;
+        if (s.tipo_sancion === 'AMONESTACION') return false;
+        const sRut = s.jugador?.rut ? s.jugador.rut.replace(/[^kK0-9]/g, '').toLowerCase() : '';
+        const sName = s.jugador?.nombre ? s.jugador.nombre.trim().toLowerCase() : '';
+
+        if (cleanRut && sRut && cleanRut === sRut) return true;
+        if (cleanName && sName && cleanName === sName) return true;
+        return false;
+    });
+}
+
+// Datos de los que depende la fecha de habilitación sugerida (para no pisar la guardada mientras no cambien)
+function claveHabilitacion(faseId: string, numeroFecha: string, cantidad: number, unidad: string): string {
+    return `${faseId}|${numeroFecha}|${cantidad}|${unidad}`;
+}
+
+const plural = (n: number, singular: string, pluralTxt: string) => `${n} ${n === 1 ? singular : pluralTxt}`;
 
 export default function TribunalDashboard({
     sanciones, notas, clubes, campeonatos, jugadores, referencias = []
@@ -149,7 +181,10 @@ export default function TribunalDashboard({
         unidad_tiempo: 'PARTIDOS' as 'PARTIDOS' | 'MESES' | 'AÑOS' | 'AMONESTACION',
         fecha_resolucion: new Date().toISOString().split('T')[0],
         estado: 'ACTIVO',
-        observacion: ''
+        observacion: '',
+        resolucion_texto: '',
+        habilitado_fase_id: '',
+        habilitado_numero_fecha: '',
     });
 
     const [isFormOpen, setIsFormOpen] = useState(false);
@@ -160,21 +195,8 @@ export default function TribunalDashboard({
 
     // Detección de Reincidencia: calcular sanciones previas del jugador (+1 partido por antecedente, excluyendo amonestaciones)
     const antecedenteSanciones = useMemo(() => {
-        const cleanRut = data.jugador_rut ? data.jugador_rut.replace(/[^kK0-9]/g, '').toLowerCase() : '';
-        const cleanName = data.jugador_nombre ? data.jugador_nombre.trim().toLowerCase() : '';
-
-        if (!cleanRut && !cleanName) return [];
-
-        return sanciones.filter(s => {
-            if (editingSancionId && s.id === editingSancionId) return false;
-            if (s.tipo_sancion === 'AMONESTACION') return false;
-            const sRut = s.jugador?.rut ? s.jugador.rut.replace(/[^kK0-9]/g, '').toLowerCase() : '';
-            const sName = s.jugador?.nombre ? s.jugador.nombre.trim().toLowerCase() : '';
-
-            if (cleanRut && sRut && cleanRut === sRut) return true;
-            if (cleanName && sName && cleanName === sName) return true;
-            return false;
-        });
+        const editada = editingSancionId ? sanciones.find(s => s.id === editingSancionId) ?? null : null;
+        return buscarAntecedentes(sanciones, data.jugador_rut, data.jugador_nombre, editada);
     }, [data.jugador_rut, data.jugador_nombre, sanciones, editingSancionId]);
 
     const reincidenciaCount = antecedenteSanciones.length;
@@ -237,6 +259,73 @@ export default function TribunalDashboard({
         }
     }, [basePartidos, reincidenciaCount, data.unidad_tiempo, reincidenciaAplica, esLiguilla]);
 
+    // Habilitación sugerida para suspensiones por partidos: cumple las N fechas siguientes a la de la falta.
+    // Si se pasa del total de fechas de la fase, sigue en la próxima fase del campeonato (sin contar las de definición).
+    const habilitacionSugerida = useMemo(() => {
+        if (data.unidad_tiempo !== 'PARTIDOS' || !selectedFase || !data.numero_fecha) return null;
+
+        const fases = [...fasesDisponibles]
+            .filter(f => f.id === selectedFase.id || !/^definici[oó]n/i.test(f.nombre))
+            .sort((a, b) => a.id - b.id);
+        let idx = fases.findIndex(f => f.id === selectedFase.id);
+        let fecha = parseInt(data.numero_fecha) + data.cantidad_sancion + 1;
+
+        while (fecha > fases[idx].cantidad_fechas && idx + 1 < fases.length) {
+            fecha -= fases[idx].cantidad_fechas;
+            idx++;
+        }
+        if (fecha > fases[idx].cantidad_fechas) return null; // termina de cumplirse en otro campeonato
+
+        return { fase_id: fases[idx].id.toString(), numero_fecha: fecha.toString() };
+    }, [data.unidad_tiempo, data.numero_fecha, data.cantidad_sancion, selectedFase, fasesDisponibles]);
+
+    const habilitacionCargada = useRef<string | null>(null);
+
+    useEffect(() => {
+        const clave = claveHabilitacion(data.fase_id, data.numero_fecha, data.cantidad_sancion, data.unidad_tiempo);
+        if (habilitacionCargada.current === clave) return;
+        habilitacionCargada.current = null;
+        setData(prev => ({
+            ...prev,
+            habilitado_fase_id: habilitacionSugerida?.fase_id ?? '',
+            habilitado_numero_fecha: habilitacionSugerida?.numero_fecha ?? '',
+        }));
+    }, [habilitacionSugerida]);
+
+    const generarTextoResolucion = () => {
+        const club = clubes.find(c => c.id.toString() === data.club_id?.toString())?.name;
+        const nombre = data.jugador_nombre.trim();
+        const cargo = { JUGADOR: 'el jugador', TURNO: 'el director de turno', DIRIGENTE: 'el dirigente', CLUB: 'el club' }[data.tipo_involucrado];
+        const sujeto = data.tipo_involucrado === 'CLUB'
+            ? `el club ${club ?? nombre}`
+            : `${cargo} ${nombre}${club ? `, del club ${club},` : ''}`;
+
+        let medida: string;
+        if (data.unidad_tiempo === 'AMONESTACION') {
+            medida = 'se le cursa Carta de Amonestación escrita, sin suspensión de partidos';
+        } else if (data.unidad_tiempo === 'PARTIDOS' && reincidenciaAplica) {
+            medida = `quedando con ${plural(basePartidos, 'partido', 'partidos')} + ${reincidenciaCount} por reincidencia (${plural(data.cantidad_sancion, 'partido', 'partidos')} en total)`;
+        } else if (data.unidad_tiempo === 'PARTIDOS') {
+            medida = `quedando con ${plural(data.cantidad_sancion, 'partido', 'partidos')} de suspensión`;
+        } else {
+            const termino = new Date(`${data.fecha_resolucion}T00:00:00`);
+            if (data.unidad_tiempo === 'MESES') termino.setMonth(termino.getMonth() + data.cantidad_sancion);
+            else termino.setFullYear(termino.getFullYear() + data.cantidad_sancion);
+            const unidad = data.unidad_tiempo === 'MESES' ? ['mes', 'meses'] : ['año', 'años'];
+            medida = `quedando suspendido por ${plural(data.cantidad_sancion, unidad[0], unidad[1])}, hasta el ${termino.toLocaleDateString('es-CL', { day: 'numeric', month: 'long', year: 'numeric' })}`;
+        }
+
+        const faseHabilitado = fasesDisponibles.find(f => f.id.toString() === data.habilitado_fase_id);
+        const habilitado = data.unidad_tiempo === 'PARTIDOS' && faseHabilitado && data.habilitado_numero_fecha
+            ? `, y queda habilitado a partir de la Fecha ${data.habilitado_numero_fecha} del ${faseHabilitado.nombre}`
+            : '';
+
+        setData('resolucion_texto',
+            `El Comité de Disciplina, luego de la revisión de la papeleta, resuelve que ${sujeto} comete la falta "${data.tipo_falta}". ` +
+            `Se aplica el ${data.articulo_reglamento}, ${medida}${habilitado}.`
+        );
+    };
+
     // Calculate array of numbers for fechas
     const fechasDisponibles = useMemo(() => {
         if (!data.fase_id) return [];
@@ -285,7 +374,7 @@ export default function TribunalDashboard({
     }, [jugadores, data.club_id, jugadorSearch]);
 
     const resetForm = () => {
-        reset('tipo_involucrado', 'club_id', 'jugador_rut', 'jugador_nombre', 'articulo_reglamento', 'tipo_falta', 'observacion', 'cantidad_sancion', 'tipo_sancion', 'unidad_tiempo', 'fecha_resolucion', 'estado');
+        reset('tipo_involucrado', 'club_id', 'jugador_rut', 'jugador_nombre', 'articulo_reglamento', 'tipo_falta', 'observacion', 'cantidad_sancion', 'tipo_sancion', 'unidad_tiempo', 'fecha_resolucion', 'estado', 'resolucion_texto', 'habilitado_fase_id', 'habilitado_numero_fecha');
         if (contextoPrevio) {
             setData(prev => ({ ...prev, ...contextoPrevio }));
             setContextoPrevio(null);
@@ -299,10 +388,12 @@ export default function TribunalDashboard({
     };
 
     const handleEdit = (sancion: any) => {
-        const prevCount = sanciones.filter(s => s.id !== sancion.id && (
-            (s.jugador?.rut && sancion.jugador?.rut && s.jugador.rut === sancion.jugador.rut) ||
-            (s.jugador?.nombre && sancion.jugador?.nombre && s.jugador.nombre === sancion.jugador.nombre)
-        )).length;
+        const prevCount = buscarAntecedentes(
+            sanciones,
+            sancion.jugador?.rut || sancion.rut_involucrado || '',
+            sancion.jugador?.nombre || sancion.nombre_involucrado || '',
+            sancion,
+        ).length;
         
         setBasePartidos(Math.max(1, sancion.cantidad_sancion - prevCount));
         if (!editingSancionId) {
@@ -330,7 +421,14 @@ export default function TribunalDashboard({
             unidad_tiempo: sancion.unidad_tiempo,
             fecha_resolucion: sancion.fecha_resolucion ? sancion.fecha_resolucion.split('T')[0] : new Date().toISOString().split('T')[0],
             estado: sancion.estado,
+            resolucion_texto: sancion.resolucion_texto || '',
+            habilitado_fase_id: sancion.habilitado_fase_id?.toString() || '',
+            habilitado_numero_fecha: sancion.habilitado_numero_fecha?.toString() || '',
         });
+        // Si ya tenía habilitación guardada, no se recalcula hasta que cambie la fecha, fase o cantidad
+        habilitacionCargada.current = sancion.habilitado_fase_id
+            ? claveHabilitacion(sancion.fase_id?.toString() || '', sancion.numero_fecha?.toString() || '', sancion.cantidad_sancion, sancion.unidad_tiempo)
+            : null;
         setEditingSancionId(sancion.id);
         setIsFormOpen(true);
     };
@@ -1237,7 +1335,7 @@ export default function TribunalDashboard({
                                                     ...prev,
                                                     unidad_tiempo: 'PARTIDOS',
                                                     tipo_sancion: 'PARTIDOS',
-                                                    estado: 'ACTIVO',
+                                                    estado: prev.tipo_sancion === 'AMONESTACION' ? 'ACTIVO' : prev.estado,
                                                 }))}
                                                 className={`py-2.5 px-3 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
                                                     data.unidad_tiempo === 'PARTIDOS'
@@ -1253,7 +1351,7 @@ export default function TribunalDashboard({
                                                     ...prev,
                                                     unidad_tiempo: prev.unidad_tiempo === 'AÑOS' ? 'AÑOS' : 'MESES',
                                                     tipo_sancion: 'TIEMPO',
-                                                    estado: 'ACTIVO',
+                                                    estado: prev.tipo_sancion === 'AMONESTACION' ? 'ACTIVO' : prev.estado,
                                                 }))}
                                                 className={`py-2.5 px-3 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
                                                     data.unidad_tiempo === 'MESES' || data.unidad_tiempo === 'AÑOS'
@@ -1403,6 +1501,105 @@ export default function TribunalDashboard({
                                                 {errors.fecha_resolucion && <p className="text-red-500 text-xs font-medium mt-1">{errors.fecha_resolucion}</p>}
                                             </div>
                                         </div>
+
+                                        {/* Habilitación: fecha desde la que vuelve a jugar (solo suspensiones por partidos) */}
+                                        {data.unidad_tiempo === 'PARTIDOS' && (
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                                                    Queda Habilitado a partir de
+                                                </label>
+                                                <div className="grid grid-cols-2 gap-2">
+                                                    <select
+                                                        value={data.habilitado_fase_id}
+                                                        onChange={e => setData(prev => ({ ...prev, habilitado_fase_id: e.target.value, habilitado_numero_fecha: e.target.value ? prev.habilitado_numero_fecha : '' }))}
+                                                        className="w-full rounded-xl border border-slate-300 bg-white py-2.5 px-3.5 text-sm font-semibold text-slate-800 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 shadow-xs"
+                                                    >
+                                                        <option value="">Sin definir</option>
+                                                        {fasesDisponibles.map(f => (
+                                                            <option key={f.id} value={f.id.toString()}>{f.nombre}</option>
+                                                        ))}
+                                                    </select>
+                                                    <select
+                                                        value={data.habilitado_numero_fecha}
+                                                        onChange={e => setData('habilitado_numero_fecha', e.target.value)}
+                                                        disabled={!data.habilitado_fase_id}
+                                                        className="w-full rounded-xl border border-slate-300 bg-white py-2.5 px-3.5 text-sm font-semibold text-slate-800 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 shadow-xs disabled:bg-slate-50 disabled:text-slate-400"
+                                                    >
+                                                        <option value="">Fecha…</option>
+                                                        {Array.from({ length: fasesDisponibles.find(f => f.id.toString() === data.habilitado_fase_id)?.cantidad_fechas ?? 0 }, (_, i) => i + 1).map(n => (
+                                                            <option key={n} value={n.toString()}>Fecha {n}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                <p className="text-[11px] text-slate-500 font-medium mt-1">
+                                                    {habilitacionSugerida
+                                                        ? 'Calculado automáticamente: cumple las fechas siguientes a la de la falta. Cámbielo si hubo fecha libre o partido suspendido.'
+                                                        : 'La sanción no alcanza a cumplirse en este campeonato: indíquelo en el texto de la resolución.'}
+                                                </p>
+                                                {(errors.habilitado_fase_id || errors.habilitado_numero_fecha) && (
+                                                    <p className="text-red-500 text-xs font-medium mt-1">{errors.habilitado_fase_id || errors.habilitado_numero_fecha}</p>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {/* Texto de la resolución del Comité: se imprime en el oficio */}
+                                        <div>
+                                            <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                                                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                                                    Texto de la Resolución <span className="text-slate-400 font-medium lowercase">(se imprime en el oficio)</span>
+                                                </label>
+                                                <button
+                                                    type="button"
+                                                    onClick={generarTextoResolucion}
+                                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-all cursor-pointer"
+                                                >
+                                                    <FileText size={14} className="shrink-0" />
+                                                    {data.resolucion_texto ? 'Regenerar texto' : 'Generar texto'}
+                                                </button>
+                                            </div>
+                                            <textarea
+                                                rows={4}
+                                                value={data.resolucion_texto}
+                                                onChange={e => setData('resolucion_texto', e.target.value)}
+                                                placeholder='El Comité de Disciplina, luego de la revisión de la papeleta, resuelve que el jugador… comete la falta "…". Se aplica el Art. …, quedando con … partido(s), y queda habilitado a partir de la Fecha … del …'
+                                                className="w-full rounded-xl border border-slate-300 bg-white focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-sm font-medium text-slate-800 transition-all shadow-xs py-2.5 px-3.5"
+                                            />
+                                            {errors.resolucion_texto && <p className="text-red-500 text-xs font-medium mt-1">{errors.resolucion_texto}</p>}
+                                        </div>
+
+                                        {/* Estado: solo al editar una suspensión (la amonestación nace cumplida) */}
+                                        {editingSancionId && data.unidad_tiempo !== 'AMONESTACION' && (
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                                                    Estado de la Sanción
+                                                </label>
+                                                <div className="grid grid-cols-2 gap-2 p-1.5 bg-slate-100 rounded-xl border border-slate-200/80">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setData('estado', 'ACTIVO')}
+                                                        className={`py-2.5 px-3 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+                                                            data.estado === 'ACTIVO'
+                                                                ? 'bg-amber-500 text-white shadow-sm'
+                                                                : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
+                                                        }`}
+                                                    >
+                                                        ⏳ Activa (en cumplimiento)
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setData('estado', 'CUMPLIDO')}
+                                                        className={`py-2.5 px-3 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+                                                            data.estado === 'CUMPLIDO'
+                                                                ? 'bg-emerald-600 text-white shadow-sm'
+                                                                : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
+                                                        }`}
+                                                    >
+                                                        ✅ Cumplida
+                                                    </button>
+                                                </div>
+                                                {errors.estado && <p className="text-red-500 text-xs font-medium mt-1">{errors.estado}</p>}
+                                            </div>
+                                        )}
 
                                         {/* Observación */}
                                         <div className="pt-1">
