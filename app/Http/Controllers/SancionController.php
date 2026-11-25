@@ -370,6 +370,9 @@ class SancionController extends Controller
             ->where('campeonato_id', $campeonato->id)
             ->where('fase_id', $fase->id)
             ->where('numero_fecha', $numero_fecha)
+            // Las amonestaciones escritas van solo en la sección de notas del acta, no en la tabla
+            ->where('tipo_sancion', '!=', 'AMONESTACION')
+            ->where('unidad_tiempo', '!=', 'AMONESTACION')
             ->orderBy('club_id')
             ->get();
 
