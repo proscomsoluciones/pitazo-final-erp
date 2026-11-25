@@ -396,7 +396,7 @@ class SancionController extends Controller
             'numero_fecha' => $numero_fecha,
             'asoc' => $asoc,
             'fecha_emision' => now()->format('Y-m-d')
-        ])->setPaper('a4', 'landscape');
+        ])->setPaper('a4', 'portrait');
 
         // Ej: Acta_Disciplina_Fecha_11_Apertura_Campeonato_oficial_2026.pdf
         $nombreArchivo = collect(['Acta_Disciplina', 'Fecha', $numero_fecha, $fase->nombre, $campeonato->nombre])

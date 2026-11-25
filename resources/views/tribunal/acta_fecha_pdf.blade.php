@@ -6,7 +6,7 @@
     <title>Acta de Comité de Disciplina - Fecha {{ $numero_fecha }}</title>
     <style>
         @page {
-            margin: 10mm 20mm 20mm 20mm;
+            margin: 10mm 15mm 15mm 15mm;
         }
 
         * {
@@ -26,7 +26,7 @@
         /* ── MARCA DE AGUA ── */
         .watermark {
             position: fixed;
-            top: 220px;
+            top: 360px;
             left: 0;
             width: 100%;
             text-align: center;
@@ -211,7 +211,7 @@
 
         .data-table td {
             border: 1px solid #cbd5e1;
-            padding: 5px 6px;
+            padding: 4px 6px;
             vertical-align: top;
         }
 
@@ -228,6 +228,7 @@
             border: 1px solid #fecaca;
             display: inline-block;
             text-align: center;
+            white-space: nowrap;
         }
 
         .cumple-nota {
@@ -288,8 +289,11 @@
             padding: 2px 8px;
             border-radius: 3px;
             border: 1px solid #047857;
-            margin-left: 4px;
             display: inline-block;
+        }
+
+        .monto-wrap {
+            margin-top: 3px;
         }
 
         .monto-tag.aporte-tag {
@@ -301,7 +305,7 @@
         .signature-table {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 100px;
+            margin-top: 90px;
         }
 
         .signature-table td {
@@ -309,7 +313,7 @@
             width: 50%;
             text-align: center;
             vertical-align: top;
-            padding: 0 35px;
+            padding: 0 20px;
         }
 
         .signature-line {
@@ -448,10 +452,10 @@
     <table class="data-table">
         <thead>
             <tr>
-                <th width="16%">Club</th>
-                <th width="22%">Jugador / Involucrado</th>
-                <th width="11%">Artículo</th>
-                <th width="11%" style="text-align: center;">Sanción</th>
+                <th width="26%">Club</th>
+                <th width="34%">Jugador / Involucrado</th>
+                <th width="17%">Artículo</th>
+                <th width="23%" style="text-align: center;">Sanción</th>
             </tr>
         </thead>
         <tbody>
@@ -515,7 +519,7 @@
                         @endif
                         {{ $nota->nota }}
                         @if($nota->monto)
-                            <span class="monto-tag {{ $esAporte ? 'aporte-tag' : '' }}">{{ $esAporte ? 'Aporte' : 'Multa' }}: ${{ number_format($nota->monto, 0, ',', '.') }}.-</span>
+                            <div class="monto-wrap"><span class="monto-tag {{ $esAporte ? 'aporte-tag' : '' }}">{{ $esAporte ? 'Aporte' : 'Multa' }}: ${{ number_format($nota->monto, 0, ',', '.') }}.-</span></div>
                         @endif
                     </li>
                 @endforeach
@@ -532,7 +536,7 @@
                     <li>
                         {{ $fondo->numero_fondo ? 'Fondo N°' . $fondo->numero_fondo . ' - ' : '' }}{{ $fondo->jugador_nombre }} ({{ $fondo->club->name ?? 'Club' }}){{ $fondo->diagnostico ? ' - ' . $fondo->diagnostico : '' }}
                         @if($fondo->monto_asignado)
-                            <span class="monto-tag aporte-tag">Aporte{{ $fondo->tipo_beneficio ? ' ' . $fondo->tipo_beneficio : '' }}: ${{ number_format($fondo->monto_asignado, 0, ',', '.') }}.-</span>
+                            <div class="monto-wrap"><span class="monto-tag aporte-tag">Aporte{{ $fondo->tipo_beneficio ? ' ' . $fondo->tipo_beneficio : '' }}: ${{ number_format($fondo->monto_asignado, 0, ',', '.') }}.-</span></div>
                         @endif
                     </li>
                 @endforeach
